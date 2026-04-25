@@ -1,6 +1,5 @@
 import { useState, useEffect, useRef } from "react";
 
-// ── Config ────────────────────────────────────────────────────────
 const SUPABASE_URL = "https://tutxrpfvxengypzfuyaa.supabase.co";
 const SUPABASE_KEY = "sb_publishable_gycYwpzlXb_ffXErJ78xBQ_Qe7A7-xY";
 const ADMIN_WA = "966501277870";
@@ -16,7 +15,6 @@ interface FormData { name:string; hijriYear:string; hijriMonth:string; hijriDay:
 interface AdminAccount { id:string; label:string; password:string; }
 const initialForm:FormData = { name:"",hijriYear:"",hijriMonth:"",hijriDay:"",day:"",phone:"",venue:"",mapLink:"",notes:"" };
 
-// ── Supabase ──────────────────────────────────────────────────────
 const api = async (method:string, path:string, body?:object) => {
   const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`,{
     method,
@@ -33,7 +31,6 @@ const dbToEvent = (r:Record<string,unknown>):Event => ({
   status:r.status as "pending"|"approved", createdAt:r.created_at as number,
 });
 
-// ── Hijri helpers ─────────────────────────────────────────────────
 const parseHijriParts = (d:string):{y:number;m:number;day:number} => {
   const clean = d.replace(/\s*هـ\s*/g,"").trim();
   const parts = clean.split("/").map(p=>parseInt(p.trim())||0);
@@ -67,16 +64,6 @@ const generateId = ():string => Date.now().toString(36)+Math.random().toString(3
 const generatePass = ():string => Math.random().toString(36).slice(2,8).toUpperCase();
 const getMonthName = (hijriDate:string):string => { const {m}=parseHijriParts(hijriDate); return m>0?HIJRI_MONTHS[m-1]:""; };
 
-// ── html2canvas ───────────────────────────────────────────────────
-const loadH2C = () => new Promise<(el:HTMLElement,o?:object)=>Promise<HTMLCanvasElement>>(res=>{
-  if((window as any).html2canvas){res((window as any).html2canvas);return;}
-  const s=document.createElement("script");
-  s.src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js";
-  s.onload=()=>res((window as any).html2canvas);
-  document.head.appendChild(s);
-});
-
-// ── App ───────────────────────────────────────────────────────────
 export default function App() {
   const [page, setPage] = useState("home");
   const [events, setEvents] = useState<Event[]>([]);
@@ -95,8 +82,6 @@ export default function App() {
   const [filterDay, setFilterDay] = useState("");
   const [filterMonth, setFilterMonth] = useState("");
   const sidebarRef = useRef<HTMLDivElement>(null);
-  const filterRef = useRef<HTMLDivElement>(null);
-  const viewMenuRef = useRef<HTMLDivElement>(null);
 
   const [isAdmin, setIsAdmin] = useState(()=>sessionStorage.getItem("manasbat_admin")==="1");
   const [adminAccounts, setAdminAccounts] = useState<AdminAccount[]>(()=>{ const s=localStorage.getItem("manasbat_admins"); return s?JSON.parse(s):[{id:"1",label:"المدير الرئيسي",password:"admin1234"}]; });
@@ -117,19 +102,17 @@ export default function App() {
     try { const rows=await api("GET","events?order=created_at.desc"); if(Array.isArray(rows)) setEvents(rows.map(dbToEvent)); } catch {}
     setLoading(false);
   };
-
   useEffect(()=>{ loadEvents(); },[]);
+
+  // Close sidebar on outside click
   useEffect(()=>{
-    const h=(e:MouseEvent)=>{
-      if(sidebarOpen&&sidebarRef.current&&!sidebarRef.current.contains(e.target as Node)) setSidebarOpen(false);
-      if(showFilter&&filterRef.current&&!filterRef.current.contains(e.target as Node)) setShowFilter(false);
-      if(showViewMenu&&viewMenuRef.current&&!viewMenuRef.current.contains(e.target as Node)) setShowViewMenu(false);
-    };
+    const h=(e:MouseEvent)=>{ if(sidebarOpen&&sidebarRef.current&&!sidebarRef.current.contains(e.target as Node)) setSidebarOpen(false); };
     document.addEventListener("mousedown",h); return ()=>document.removeEventListener("mousedown",h);
-  },[sidebarOpen,showFilter,showViewMenu]);
+  },[sidebarOpen]);
 
   const setView = (v:"full"|"compact") => { setViewMode(v); localStorage.setItem("manasbat_view",v); setShowViewMenu(false); };
-  const nav = (p:string) => { setPage(p); setSidebarOpen(false); };
+  const nav = (p:string) => { setPage(p); setSidebarOpen(false); setShowFilter(false); setShowViewMenu(false); };
+  const closeDropdowns = () => { setShowFilter(false); setShowViewMenu(false); };
 
   const allApproved = events.filter(e=>e.status==="approved"&&!isPast(e.hijriDate)).sort(sortByHijri);
   const activeApproved = allApproved.filter(e=>{
@@ -184,10 +167,15 @@ export default function App() {
     await loadEvents(); setEditingId(null);
   };
 
+  // ── Event card renderer ───────────────────────────────────────
   const renderCard = (ev:Event) => {
     const isExp = expandedId===ev.id;
+    const venueEl = ev.mapLink
+      ? <a href={ev.mapLink} target="_blank" rel="noreferrer" style={S.venueLink} onClick={e=>e.stopPropagation()}>{ev.venue}</a>
+      : <span>{ev.venue}</span>;
+
     if(viewMode==="compact") return (
-      <div key={ev.id} style={S.compactCard} onClick={()=>setExpandedId(isExp?null:ev.id)}>
+      <div key={ev.id} style={S.compactCard} onClick={()=>{ closeDropdowns(); setExpandedId(isExp?null:ev.id); }}>
         <div style={S.compactRow}>
           <span style={S.compactName}>{ev.name}</span>
           <span style={S.compactDate}>{ev.hijriDate}</span>
@@ -196,10 +184,7 @@ export default function App() {
         {isExp&&(
           <div style={S.compactDetails}>
             <div style={S.cardRow}><span style={S.cardIcon}>📅</span><span>{ev.day}، {ev.hijriDate}</span></div>
-            <div style={S.cardRow}>
-              <span style={S.cardIcon}>📍</span><span>{ev.venue}</span>
-              {ev.mapLink&&<a href={ev.mapLink} target="_blank" rel="noreferrer" style={S.mapIconLink} onClick={e=>e.stopPropagation()}><GoldPinIcon/></a>}
-            </div>
+            <div style={S.cardRow}><span style={S.cardIcon}>📍</span>{venueEl}</div>
             <div style={S.cardRow}><span style={S.cardIcon}>📞</span><span>{ev.phone}</span></div>
             {ev.notes&&<p style={S.notesText}>{ev.notes}</p>}
             <button style={S.shareBtn} onClick={e=>{e.stopPropagation();setShareCardEvent(ev);}}>مشاركة</button>
@@ -214,10 +199,7 @@ export default function App() {
           <button style={S.shareIconBtn} onClick={()=>setShareCardEvent(ev)} title="مشاركة"><ShareIcon/></button>
         </div>
         <div style={S.cardRow}><span style={S.cardIcon}>📅</span><span>{ev.day}، {ev.hijriDate}</span></div>
-        <div style={S.cardRow}>
-          <span style={S.cardIcon}>📍</span><span>{ev.venue}</span>
-          {ev.mapLink&&<a href={ev.mapLink} target="_blank" rel="noreferrer" style={S.mapIconLink}><GoldPinIcon/></a>}
-        </div>
+        <div style={S.cardRow}><span style={S.cardIcon}>📍</span>{venueEl}</div>
         <div style={S.cardRow}><span style={S.cardIcon}>📞</span><span>{ev.phone}</span></div>
         {ev.notes&&<p style={S.notesText}>{ev.notes}</p>}
       </div>
@@ -247,9 +229,9 @@ export default function App() {
             {ev.notes&&<span style={{color:"#bbb",fontSize:11}}>{ev.notes}</span>}
           </div>
           <div style={S.adminActions}>
-            <button style={S.adminEditBtn} onClick={()=>startEdit(ev)} title="تعديل"><EditIcon/></button>
+            <button style={S.adminEditBtn} onClick={()=>startEdit(ev)}><EditIcon/></button>
             <button style={{...S.adminToggleBtn,background:ev.status==="approved"?"#fff8e1":"#e8f5e9",color:ev.status==="approved"?"#856404":"#2e7d32",borderColor:ev.status==="approved"?"#e8d9b5":"#c8e6c9"}} onClick={()=>toggleApprove(ev.id,ev.status)}>{ev.status==="approved"?"✕":"✓"}</button>
-            <button style={S.adminDeleteBtn} onClick={()=>deleteEvent(ev.id)} title="حذف"><TrashIcon/></button>
+            <button style={S.adminDeleteBtn} onClick={()=>deleteEvent(ev.id)}><TrashIcon/></button>
           </div>
         </div>
       )}
@@ -257,10 +239,11 @@ export default function App() {
   );
 
   return (
-    <div style={S.root}>
+    <div style={S.root} onClick={()=>closeDropdowns()}>
       <style>{css}</style>
 
-      {(sidebarOpen||showFilter||showViewMenu)&&<div style={S.overlayBg} onClick={()=>{setSidebarOpen(false);setShowFilter(false);setShowViewMenu(false);}}/>}
+      {/* Sidebar overlay */}
+      {sidebarOpen&&<div style={S.overlayBg} onClick={()=>setSidebarOpen(false)}/>}
 
       {/* Sidebar */}
       <div ref={sidebarRef} style={{...S.sidebar,transform:sidebarOpen?"translateX(0)":"translateX(100%)"}}>
@@ -279,7 +262,7 @@ export default function App() {
 
       {/* Nav */}
       <nav style={S.nav}>
-        <button style={S.hamburger} onClick={()=>setSidebarOpen(true)}><span/><span/><span/></button>
+        <button style={S.hamburger} onClick={e=>{e.stopPropagation();setSidebarOpen(true);}}><span/><span/><span/></button>
         <div style={S.navTitle}>{SITE_NAME}</div>
         <div style={{width:40}}/>
       </nav>
@@ -298,16 +281,25 @@ export default function App() {
                 {allApproved.length>0&&<span style={S.countBadge}>{allApproved.length}</span>}
               </h2>
               <div style={{display:"flex",gap:6,alignItems:"center"}}>
-                {/* Search/Filter icon — magnifying glass */}
-                <div ref={filterRef} style={{position:"relative"}}>
-                  <button style={{...S.toolBtn,...(hasFilter?S.toolBtnActive:{})}} onClick={()=>setShowFilter(v=>!v)} title="بحث وتصفية">
+
+                {/* Search/Filter button */}
+                <div style={{position:"relative"}}>
+                  <button
+                    style={{...S.toolBtn,...(hasFilter?S.toolBtnActive:{})}}
+                    onClick={e=>{e.stopPropagation();setShowViewMenu(false);setShowFilter(v=>!v);}}
+                  >
                     <SearchIcon active={hasFilter}/>
                   </button>
                   {showFilter&&(
-                    <div style={S.filterPanel}>
-                      <p style={S.filterTitle}>بحث وتصفية</p>
-                      <input style={{...S.input,marginBottom:10,fontSize:12}} placeholder="بحث بالاسم أو المكان..." value={searchText} onChange={e=>setSearchText(e.target.value)}/>
-                      <select style={{...S.select,marginBottom:10,fontSize:12}} value={filterDay} onChange={e=>setFilterDay(e.target.value)}>
+                    <div style={S.dropdown} onClick={e=>e.stopPropagation()}>
+                      <p style={S.dropTitle}>بحث وتصفية</p>
+                      <input
+                        style={{...S.input,fontSize:12,marginBottom:8}}
+                        placeholder="بحث بالاسم أو المكان..."
+                        value={searchText}
+                        onChange={e=>setSearchText(e.target.value)}
+                      />
+                      <select style={{...S.select,fontSize:12,marginBottom:8}} value={filterDay} onChange={e=>setFilterDay(e.target.value)}>
                         <option value="">كل الأيام</option>
                         {DAYS.map(d=><option key={d} value={d}>{d}</option>)}
                       </select>
@@ -315,28 +307,43 @@ export default function App() {
                         <option value="">كل الأشهر</option>
                         {HIJRI_MONTHS.map(m=><option key={m} value={m}>{m}</option>)}
                       </select>
-                      {hasFilter&&<button style={{...S.cancelBtn,marginTop:10,width:"100%",textAlign:"center" as const,fontSize:12}} onClick={()=>{setSearchText("");setFilterDay("");setFilterMonth("");}}>مسح التصفية</button>}
+                      {hasFilter&&(
+                        <button style={{...S.cancelBtn,marginTop:8,width:"100%",fontSize:12,textAlign:"center" as const}} onClick={()=>{setSearchText("");setFilterDay("");setFilterMonth("");}}>
+                          مسح التصفية
+                        </button>
+                      )}
                     </div>
                   )}
                 </div>
-                {/* View toggle — single icon */}
-                <div ref={viewMenuRef} style={{position:"relative"}}>
-                  <button style={S.toolBtn} onClick={()=>setShowViewMenu(v=>!v)} title="طريقة العرض">
-                    <ViewIcon mode={viewMode}/>
+
+                {/* View toggle button */}
+                <div style={{position:"relative"}}>
+                  <button
+                    style={S.toolBtn}
+                    onClick={e=>{e.stopPropagation();setShowFilter(false);setShowViewMenu(v=>!v);}}
+                  >
+                    {viewMode==="compact"
+                      ? <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#888" strokeWidth="2.2" strokeLinecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+                      : <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#888" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="8" height="8" rx="1"/><rect x="13" y="3" width="8" height="8" rx="1"/><rect x="3" y="13" width="8" height="8" rx="1"/><rect x="13" y="13" width="8" height="8" rx="1"/></svg>
+                    }
                   </button>
                   {showViewMenu&&(
-                    <div style={S.viewMenu}>
-                      <button style={{...S.viewOption,...(viewMode==="full"?S.viewOptionActive:{})}} onClick={()=>setView("full")}>
-                        <FullViewIcon/> عرض كامل
+                    <div style={{...S.dropdown,width:150}} onClick={e=>e.stopPropagation()}>
+                      <button style={{...S.viewOpt,...(viewMode==="full"?S.viewOptActive:{})}} onClick={()=>setView("full")}>
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="5" rx="1"/><rect x="3" y="10" width="18" height="5" rx="1"/><rect x="3" y="17" width="18" height="5" rx="1"/></svg>
+                        عرض كامل
                       </button>
-                      <button style={{...S.viewOption,...(viewMode==="compact"?S.viewOptionActive:{})}} onClick={()=>setView("compact")}>
-                        <CompactViewIcon/> عرض مضغوط
+                      <button style={{...S.viewOpt,...(viewMode==="compact"?S.viewOptActive:{})}} onClick={()=>setView("compact")}>
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+                        عرض مضغوط
                       </button>
                     </div>
                   )}
                 </div>
+
               </div>
             </div>
+
             {loading&&<p style={S.empty}>جاري التحميل...</p>}
             {!loading&&activeApproved.length===0&&<p style={S.empty}>{hasFilter?"لا توجد نتائج":"لا توجد مناسبات معتمدة حتى الآن"}</p>}
             <div style={S.grid}>{activeApproved.map(renderCard)}</div>
@@ -464,74 +471,46 @@ export default function App() {
   );
 }
 
-// ── Poster Modal ──────────────────────────────────────────────────
+// ── Poster ────────────────────────────────────────────────────────
 function PosterModal({events,onClose}:{events:Event[];onClose:()=>void}) {
-  const posterRef = useRef<HTMLDivElement>(null);
-  const [downloading, setDownloading] = useState(false);
-  const today = new Date().toLocaleDateString("ar-SA-u-ca-islamic",{year:"numeric",month:"long",day:"numeric"});
-
-  const downloadPoster = async () => {
-    if(!posterRef.current) return;
-    setDownloading(true);
-    try {
-      await document.fonts.ready;
-      const h2c = await loadH2C();
-      const el = posterRef.current;
-      const canvas = await h2c(el,{
-        scale:2, useCORS:true, allowTaint:true,
-        backgroundColor:"#ffffff",
-        width:el.scrollWidth, height:el.scrollHeight,
-        windowWidth:el.scrollWidth, windowHeight:el.scrollHeight,
-      });
-      const link = document.createElement("a");
-      link.download = "زواجات-الخيرة.png";
-      link.href = canvas.toDataURL("image/png",1.0);
-      link.click();
-    } catch(e) { console.error(e); alert("حدث خطأ أثناء التحميل، جرّب تصوير الشاشة"); }
-    setDownloading(false);
-  };
+  const count = events.length;
+  // Auto-scale: fit up to 20 events
+  const fs = count<=5?14:count<=8?13:count<=12?11:count<=16?10:9;
+  const rp = count<=5?10:count<=10?7:count<=15?5:4;
 
   return (
-    <div style={M.overlay} onClick={onClose}>
-      <div style={{maxWidth:380,width:"100%",position:"relative",display:"flex",flexDirection:"column",maxHeight:"92vh"}} onClick={e=>e.stopPropagation()}>
-        {/* Controls */}
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8,padding:"0 2px",flexShrink:0}}>
-          <p style={{color:"#fff",fontSize:11}}>صوّر الشاشة أو حمّل الصورة</p>
-          <div style={{display:"flex",gap:6}}>
-            <button style={{background:"#c9a227",border:"none",color:"#fff",borderRadius:7,padding:"6px 14px",cursor:"pointer",fontSize:12,fontWeight:700,fontFamily:"inherit",opacity:downloading?0.7:1}} onClick={downloadPoster} disabled={downloading}>
-              {downloading?"جاري...":"⬇️ تحميل"}
-            </button>
-            <button style={{background:"rgba(255,255,255,0.2)",border:"none",color:"#fff",borderRadius:"50%",width:28,height:28,cursor:"pointer",fontSize:13}} onClick={onClose}>✕</button>
-          </div>
+    <div style={PM.overlay} onClick={onClose}>
+      <div style={PM.wrap} onClick={e=>e.stopPropagation()}>
+        <div style={PM.bar}>
+          <span style={{color:"#fff",fontSize:11}}>صوّر الشاشة لمشاركة البوستر</span>
+          <button style={PM.closeBtn} onClick={onClose}>✕</button>
         </div>
-        {/* Scrollable poster view */}
-        <div style={{overflowY:"auto",borderRadius:12}}>
-          <div ref={posterRef} style={P.poster}>
-            <div style={P.topBorder}/>
-            <div style={P.header}>
-              <p style={P.ornamentText}>﷽</p>
-              <h1 style={P.title}>{SITE_NAME}</h1>
-              <p style={P.subtitle}>قبيلة الخيرة — مركز دوقة</p>
-              <span style={P.dateBadge}>{today}</span>
+        <div style={PM.scroll}>
+          <div style={PM.poster}>
+            <div style={PM.topStripe}/>
+            <div style={PM.header}>
+              <p style={PM.basmala}>﷽</p>
+              <h1 style={PM.title}>{SITE_NAME}</h1>
+              <p style={PM.sub}>قبيلة الخيرة — مركز دوقة</p>
             </div>
-            <div style={P.divRow}>— ❖ —</div>
-            <div style={P.list}>
+            <div style={PM.divider}>— ❖ —</div>
+            <div style={PM.list}>
               {events.map((ev,i)=>(
-                <div key={ev.id} style={{...P.row,background:i%2===0?"#ffffff":"#fdfaf4"}}>
-                  <div style={P.num}>{i+1}</div>
-                  <div style={P.info}>
-                    <span style={P.evName}>{ev.name}</span>
-                    <span style={P.evMeta}>{ev.day} · {ev.hijriDate} · {ev.venue}</span>
+                <div key={ev.id} style={{...PM.row,background:i%2===0?"#fff":"#fdfaf3",padding:`${rp}px 10px`}}>
+                  <div style={PM.num}>{i+1}</div>
+                  <div style={PM.info}>
+                    <span style={{...PM.name,fontSize:fs}}>{ev.name}</span>
+                    <span style={{...PM.meta,fontSize:fs-2}}>{ev.day} · {ev.hijriDate} · {ev.venue}</span>
                   </div>
                 </div>
               ))}
             </div>
-            <div style={P.divRow}>— ❖ —</div>
-            <div style={P.posterFoot}>
-              <p style={P.footText}>نبارك للعرسان ونتمنى لهم حياة سعيدة مباركة</p>
-              <p style={P.footSite}>{SITE_NAME} — مساهمة مجتمعية</p>
+            <div style={PM.divider}>— ❖ —</div>
+            <div style={PM.foot}>
+              <p style={PM.footText}>نبارك للعرسان ونتمنى لهم حياة سعيدة مباركة</p>
+              <p style={PM.footSite}>{SITE_NAME} — مساهمة مجتمعية</p>
             </div>
-            <div style={P.topBorder}/>
+            <div style={PM.topStripe}/>
           </div>
         </div>
       </div>
@@ -539,73 +518,44 @@ function PosterModal({events,onClose}:{events:Event[];onClose:()=>void}) {
   );
 }
 
-// ── Share Card Modal ──────────────────────────────────────────────
+// ── Share Card ────────────────────────────────────────────────────
 function ShareCardModal({ev,onClose,onWa}:{ev:Event;onClose:()=>void;onWa:(e:Event)=>void}) {
   return (
-    <div style={M.overlay} onClick={onClose}>
-      <div style={M.modal} onClick={e=>e.stopPropagation()}>
-        <button style={M.closeBtn} onClick={onClose}>✕</button>
+    <div style={MC.overlay} onClick={onClose}>
+      <div style={MC.modal} onClick={e=>e.stopPropagation()}>
+        <button style={MC.closeBtn} onClick={onClose}>✕</button>
         <p style={{color:"#999",fontSize:12,textAlign:"center",marginBottom:14}}>صوّر الشاشة أو شارك عبر واتساب</p>
-        <div style={M.card}>
-          <div style={M.cardBar}/>
+        <div style={MC.card}>
+          <div style={MC.stripe}/>
           <div style={{textAlign:"center",padding:"14px 16px 4px"}}>
             <p style={{fontSize:20,color:"#c9a227",margin:"0 0 2px"}}>❧</p>
             <p style={{fontSize:11,color:"#aaa",margin:0}}>يسعدنا دعوتكم لحفل زواج</p>
           </div>
-          <div style={M.cardDiv}/>
-          <h2 style={M.cardName}>{ev.name}</h2>
-          <div style={M.cardDiv}/>
+          <div style={MC.div}/>
+          <h2 style={MC.name}>{ev.name}</h2>
+          <div style={MC.div}/>
           <div style={{padding:"4px 18px 14px"}}>
-            <div style={M.cardRow}><span>📅</span><span><strong>{ev.day}</strong> — {ev.hijriDate}</span></div>
-            <div style={M.cardRow}><span>📍</span><span>{ev.venue}</span></div>
-            {ev.notes&&<div style={M.cardRow}><span>📝</span><span style={{color:"#aaa",fontSize:12}}>{ev.notes}</span></div>}
+            <div style={MC.row}><span>📅</span><span><strong>{ev.day}</strong> — {ev.hijriDate}</span></div>
+            <div style={MC.row}><span>📍</span><span>{ev.venue}</span></div>
+            {ev.notes&&<div style={MC.row}><span>📝</span><span style={{color:"#aaa",fontSize:12}}>{ev.notes}</span></div>}
           </div>
-          <div style={{textAlign:"center",padding:"6px",borderTop:"1px solid #e8d9b5"}}>
+          <div style={{textAlign:"center",padding:"7px",borderTop:"1px solid #e8d9b5"}}>
             <span style={{fontSize:11,color:"#c9a227",fontWeight:700}}>{SITE_NAME}</span>
           </div>
-          <div style={M.cardBar}/>
+          <div style={MC.stripe}/>
         </div>
-        <button style={M.waBtn} onClick={()=>onWa(ev)}><WaIcon/>&nbsp; مشاركة عبر واتساب</button>
+        <button style={MC.waBtn} onClick={()=>onWa(ev)}><WaIcon/>&nbsp; مشاركة عبر واتساب</button>
       </div>
     </div>
   );
 }
 
 // ── Icons ─────────────────────────────────────────────────────────
-function GoldPinIcon() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-      <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z" fill="#c9a227"/>
-      <circle cx="12" cy="9" r="2.5" fill="#fff"/>
-    </svg>
-  );
-}
-function ShareIcon() {
-  return <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>;
-}
-function SearchIcon({active}:{active:boolean}) {
-  return <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={active?"#fff":"#888"} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>;
-}
-function ViewIcon({mode}:{mode:string}) {
-  return mode==="compact"
-    ? <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#888" strokeWidth="2.2" strokeLinecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
-    : <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#888" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>;
-}
-function FullViewIcon() {
-  return <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="5" rx="1"/><rect x="3" y="10" width="18" height="5" rx="1"/><rect x="3" y="17" width="18" height="5" rx="1"/></svg>;
-}
-function CompactViewIcon() {
-  return <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>;
-}
-function EditIcon() {
-  return <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>;
-}
-function TrashIcon() {
-  return <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>;
-}
-function WaIcon() {
-  return <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" style={{flexShrink:0,display:"inline-block",verticalAlign:"middle"}}><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/></svg>;
-}
+function ShareIcon() { return <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>; }
+function SearchIcon({active}:{active:boolean}) { return <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={active?"#fff":"#888"} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>; }
+function EditIcon() { return <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>; }
+function TrashIcon() { return <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>; }
+function WaIcon() { return <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" style={{flexShrink:0,display:"inline-block",verticalAlign:"middle"}}><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/></svg>; }
 
 // ── Components ────────────────────────────────────────────────────
 function Field({label,placeholder,value,onChange,optional,type="text"}:{label:string;placeholder?:string;value:string;onChange:(v:string)=>void;optional?:boolean;type?:string}) {
@@ -647,26 +597,22 @@ const S: Record<string,React.CSSProperties> = {
   sectionTitleRow:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12},
   sectionTitle:{fontSize:15,fontWeight:800,color:"#1a1208",margin:0,display:"flex",alignItems:"center",gap:6},
   countBadge:{background:"#f5f0e8",color:"#8b6914",fontSize:10,fontWeight:700,padding:"2px 7px",borderRadius:20,border:"1px solid #e8d9b5"},
-  // Tool buttons (search + view) — round
-  toolBtn:{width:32,height:32,borderRadius:"50%",background:"#f5f0e8",border:"1px solid #e8d9b5",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"},
+  toolBtn:{width:32,height:32,borderRadius:"50%",background:"#f5f0e8",border:"1px solid #e8d9b5",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0},
   toolBtnActive:{background:"#7a5a10",borderColor:"#7a5a10"},
-  filterPanel:{position:"absolute",top:38,left:0,background:"#fff",border:"1px solid #e8d9b5",borderRadius:12,padding:14,width:210,boxShadow:"0 4px 20px rgba(0,0,0,0.1)",zIndex:10},
-  filterTitle:{fontWeight:700,color:"#7a5a10",fontSize:13,marginBottom:10},
-  viewMenu:{position:"absolute",top:38,left:0,background:"#fff",border:"1px solid #e8d9b5",borderRadius:10,padding:6,width:140,boxShadow:"0 4px 16px rgba(0,0,0,0.1)",zIndex:10},
-  viewOption:{display:"flex",alignItems:"center",gap:8,width:"100%",background:"none",border:"none",cursor:"pointer",padding:"9px 10px",borderRadius:7,fontFamily:"inherit",fontSize:13,fontWeight:600,color:"#555",textAlign:"right" as const},
-  viewOptionActive:{background:"#f5f0e8",color:"#7a5a10"},
+  dropdown:{position:"absolute",top:38,left:0,background:"#fff",border:"1px solid #e8d9b5",borderRadius:12,padding:14,width:220,boxShadow:"0 4px 20px rgba(0,0,0,0.12)",zIndex:50},
+  dropTitle:{fontWeight:700,color:"#7a5a10",fontSize:13,marginBottom:10},
+  viewOpt:{display:"flex",alignItems:"center",gap:8,width:"100%",background:"none",border:"none",cursor:"pointer",padding:"9px 10px",borderRadius:7,fontFamily:"inherit",fontSize:13,fontWeight:600,color:"#555",textAlign:"right" as const},
+  viewOptActive:{background:"#f5f0e8",color:"#7a5a10"},
   grid:{display:"flex",flexDirection:"column",gap:8},
-  // Full view card
   card:{background:"#fff",borderRadius:11,padding:"11px 13px",border:"1px solid #e8d9b5",boxShadow:"0 1px 4px rgba(0,0,0,0.04)"},
   cardHeader:{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:10,marginBottom:7},
   cardName:{fontSize:14,fontWeight:800,color:"#6b4d0e",margin:0,flex:1,lineHeight:1.4,textAlign:"right"},
   shareIconBtn:{display:"flex",alignItems:"center",justifyContent:"center",width:26,height:26,borderRadius:6,background:"transparent",border:"1.5px solid #e0cfa0",cursor:"pointer",color:"#c9a227",flexShrink:0},
+  venueLink:{color:"#c9a227",fontWeight:600,textDecoration:"underline",textDecorationStyle:"dotted" as const,cursor:"pointer"},
   shareBtn:{background:"transparent",border:"1.5px solid #e0cfa0",color:"#8b6914",borderRadius:7,padding:"5px 12px",cursor:"pointer",fontFamily:"inherit",fontWeight:600,fontSize:11,marginTop:7},
   cardRow:{display:"flex",alignItems:"center",gap:7,fontSize:12,color:"#444",marginBottom:4},
   cardIcon:{fontSize:11,flexShrink:0},
-  mapIconLink:{display:"flex",alignItems:"center",marginRight:"auto",marginLeft:2},
   notesText:{margin:"3px 0 0",fontSize:11,color:"#bbb",lineHeight:1.5},
-  // Compact view — single line name
   compactCard:{background:"#fff",borderRadius:8,padding:"7px 11px",border:"1px solid #e8d9b5",cursor:"pointer"},
   compactRow:{display:"flex",alignItems:"center",gap:8},
   compactName:{flex:1,fontWeight:700,fontSize:13,color:"#6b4d0e",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" as const},
@@ -701,37 +647,42 @@ const S: Record<string,React.CSSProperties> = {
   footer:{textAlign:"center",padding:"16px",color:"#ccc",fontSize:12,borderTop:"1px solid #e8d9b5",marginTop:24},
 };
 
-const M: Record<string,React.CSSProperties> = {
+// Poster styles
+const PM: Record<string,React.CSSProperties> = {
+  overlay:{position:"fixed",inset:0,background:"rgba(0,0,0,0.7)",zIndex:500,display:"flex",alignItems:"flex-start",justifyContent:"center",padding:"16px",overflowY:"auto"},
+  wrap:{width:"100%",maxWidth:360,marginTop:8},
+  bar:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8},
+  closeBtn:{background:"rgba(255,255,255,0.2)",border:"none",color:"#fff",borderRadius:"50%",width:28,height:28,cursor:"pointer",fontSize:13},
+  scroll:{borderRadius:12,overflow:"hidden"},
+  poster:{background:"#fff",fontFamily:"'Tajawal',sans-serif",direction:"rtl"},
+  topStripe:{height:6,background:"linear-gradient(to right,#c9a227,#f0d060,#c9a227)"},
+  header:{textAlign:"center",padding:"14px 14px 8px"},
+  basmala:{fontSize:14,color:"#c9a227",margin:"0 0 5px"},
+  title:{fontSize:20,fontWeight:900,color:"#6b4d0e",margin:"0 0 3px"},
+  sub:{fontSize:11,color:"#999",margin:0},
+  divider:{textAlign:"center",color:"#c9a227",fontSize:11,letterSpacing:4,padding:"5px 0",background:"#fff"},
+  list:{background:"#fff"},
+  row:{display:"flex",alignItems:"flex-start",gap:8,borderBottom:"1px solid #f0e8d0"},
+  num:{width:18,height:18,borderRadius:"50%",background:"#c9a227",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",fontSize:9,fontWeight:800,flexShrink:0,marginTop:2},
+  info:{flex:1},
+  name:{display:"block",fontWeight:800,color:"#1a1208",marginBottom:1},
+  meta:{display:"block",color:"#555"},
+  foot:{textAlign:"center",padding:"10px 14px 12px"},
+  footText:{fontSize:11,color:"#555",margin:"0 0 3px"},
+  footSite:{fontSize:10,color:"#c9a227",fontWeight:700,margin:0},
+};
+
+// Share card styles
+const MC: Record<string,React.CSSProperties> = {
   overlay:{position:"fixed",inset:0,background:"rgba(0,0,0,0.65)",zIndex:500,display:"flex",alignItems:"center",justifyContent:"center",padding:16},
   modal:{background:"#fff",borderRadius:18,padding:16,width:"100%",maxWidth:320,position:"relative",maxHeight:"90vh",overflowY:"auto"},
   closeBtn:{position:"absolute",top:10,left:10,background:"none",border:"none",fontSize:17,cursor:"pointer",color:"#aaa"},
   card:{background:"#fff",border:"2px solid #c9a227",borderRadius:12,overflow:"hidden"},
-  cardBar:{height:5,background:"linear-gradient(to right,#c9a227,#f0d060,#c9a227)"},
-  cardDiv:{height:1,background:"linear-gradient(to right,transparent,#c9a227,transparent)",margin:"10px 18px"},
-  cardName:{fontSize:19,fontWeight:900,color:"#6b4d0e",textAlign:"center",margin:"0 16px 6px",lineHeight:1.4},
-  cardRow:{display:"flex",alignItems:"flex-start",gap:8,fontSize:13,color:"#333",marginBottom:6,justifyContent:"center"},
+  stripe:{height:5,background:"linear-gradient(to right,#c9a227,#f0d060,#c9a227)"},
+  div:{height:1,background:"linear-gradient(to right,transparent,#c9a227,transparent)",margin:"10px 18px"},
+  name:{fontSize:19,fontWeight:900,color:"#6b4d0e",textAlign:"center",margin:"0 16px 6px",lineHeight:1.4},
+  row:{display:"flex",alignItems:"flex-start",gap:8,fontSize:13,color:"#333",marginBottom:6,justifyContent:"center"},
   waBtn:{display:"flex",alignItems:"center",justifyContent:"center",gap:8,background:"#25d366",color:"#fff",border:"none",borderRadius:10,padding:"11px",cursor:"pointer",fontFamily:"inherit",fontWeight:700,fontSize:14,width:"100%",marginTop:12},
-};
-
-// Poster — clean white, all events visible
-const P: Record<string,React.CSSProperties> = {
-  poster:{background:"#ffffff",fontFamily:"'Tajawal',sans-serif",direction:"rtl",width:"100%"},
-  topBorder:{height:6,background:"linear-gradient(to right,#c9a227,#f0d060,#c9a227)"},
-  header:{textAlign:"center",padding:"16px 16px 10px",background:"#ffffff"},
-  ornamentText:{fontSize:15,color:"#c9a227",margin:"0 0 6px"},
-  title:{fontSize:22,fontWeight:900,color:"#6b4d0e",margin:"0 0 4px"},
-  subtitle:{fontSize:12,color:"#999",margin:"0 0 8px"},
-  dateBadge:{display:"inline-block",background:"rgba(201,162,39,0.08)",color:"#7a5a10",fontSize:11,fontWeight:700,padding:"3px 12px",borderRadius:20,border:"1px solid #e8d9b5"},
-  divRow:{textAlign:"center",color:"#c9a227",fontSize:12,letterSpacing:4,padding:"6px 0",background:"#ffffff"},
-  list:{padding:"0 12px",background:"#ffffff"},
-  row:{display:"flex",alignItems:"flex-start",gap:8,padding:"9px 8px",borderBottom:"1px solid #f0e8d0"},
-  num:{width:20,height:20,borderRadius:"50%",background:"#c9a227",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,fontWeight:800,flexShrink:0,marginTop:2},
-  info:{flex:1},
-  evName:{display:"block",fontWeight:800,fontSize:13,color:"#1a1208",marginBottom:2},
-  evMeta:{display:"block",fontSize:11,color:"#555"},
-  posterFoot:{textAlign:"center",padding:"10px 16px 14px",background:"#ffffff"},
-  footText:{fontSize:12,color:"#555",margin:"0 0 4px",lineHeight:1.6},
-  footSite:{fontSize:11,color:"#c9a227",fontWeight:700,margin:0},
 };
 
 const css = `
