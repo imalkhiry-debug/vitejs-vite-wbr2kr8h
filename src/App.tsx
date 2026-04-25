@@ -1,5 +1,7 @@
 import { useState, useEffect } from "react";
 
+const SUPABASE_URL = "https://tutxrpfvxengypzfuyaa.supabase.co";
+const SUPABASE_KEY = "sb_publishable_gycYwpzlXb_ffXErJ78xBQ_Qe7A7-xY";
 const ADMIN_PASSWORD = "admin1234";
 const DAYS = ["الأحد", "الإثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت"];
 
@@ -30,7 +32,33 @@ const initialForm: FormData = {
   name: "", hijriDate: "", day: "", phone: "", venue: "", mapLink: "", notes: "",
 };
 
+const api = async (method: string, path: string, body?: object) => {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
+    method,
+    headers: {
+      "apikey": SUPABASE_KEY,
+      "Authorization": `Bearer ${SUPABASE_KEY}`,
+      "Content-Type": "application/json",
+      "Prefer": method === "POST" ? "return=representation" : "",
+    },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  if (method === "DELETE" || method === "PATCH") return;
+  return res.json();
+};
 
+const dbToEvent = (row: Record<string, unknown>): Event => ({
+  id: row.id as string,
+  name: row.name as string,
+  hijriDate: row.hijri_date as string,
+  day: row.day as string,
+  phone: row.phone as string,
+  venue: row.venue as string,
+  mapLink: (row.map_link as string) || "",
+  notes: (row.notes as string) || "",
+  status: row.status as "pending" | "approved",
+  createdAt: row.created_at as number,
+});
 
 function generateId(): string {
   return Date.now().toString(36) + Math.random().toString(36).slice(2);
@@ -48,20 +76,15 @@ export default function App() {
   const [editForm, setEditForm] = useState<FormData>(initialForm);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
+  const loadEvents = async () => {
     try {
-      const stored = localStorage.getItem("manasbat_events");
-      if (stored) setEvents(JSON.parse(stored));
+      const rows = await api("GET", "events?order=created_at.desc");
+      if (Array.isArray(rows)) setEvents(rows.map(dbToEvent));
     } catch {}
     setLoading(false);
-  }, []);
-
-  const saveEvents = (updated: Event[]) => {
-    setEvents(updated);
-    try {
-      localStorage.setItem("manasbat_events", JSON.stringify(updated));
-    } catch {}
   };
+
+  useEffect(() => { loadEvents(); }, []);
 
   const approvedEvents = events.filter((e) => e.status === "approved");
 
@@ -70,8 +93,19 @@ export default function App() {
       setFormError("يرجى تعبئة جميع الحقول الإلزامية");
       return;
     }
-    const newEvent: Event = { ...form, id: generateId(), status: "pending", createdAt: Date.now() };
-    saveEvents([...events, newEvent]);
+    await api("POST", "events", {
+      id: generateId(),
+      name: form.name,
+      hijri_date: form.hijriDate,
+      day: form.day,
+      phone: form.phone,
+      venue: form.venue,
+      map_link: form.mapLink,
+      notes: form.notes,
+      status: "pending",
+      created_at: Date.now(),
+    });
+    await loadEvents();
     setForm(initialForm);
     setFormError("");
     setFormSuccess(true);
@@ -83,26 +117,31 @@ export default function App() {
     else setAdminError("كلمة المرور غير صحيحة");
   };
 
-  const toggleApprove = (id: string) => {
-    const updated = events.map((e) =>
-      e.id === id ? { ...e, status: (e.status === "approved" ? "pending" : "approved") as "pending" | "approved" } : e
-    );
-    saveEvents(updated);
+  const toggleApprove = async (id: string, current: string) => {
+    const newStatus = current === "approved" ? "pending" : "approved";
+    await api("PATCH", `events?id=eq.${id}`, { status: newStatus });
+    await loadEvents();
   };
 
-  const deleteEvent = (id: string) => {
-    saveEvents(events.filter((e) => e.id !== id));
+  const deleteEvent = async (id: string) => {
+    await api("DELETE", `events?id=eq.${id}`);
+    await loadEvents();
   };
 
   const startEdit = (ev: Event) => { setEditingId(ev.id); setEditForm({ ...ev }); };
 
-  const saveEdit = () => {
+  const saveEdit = async () => {
     if (!editingId) return;
-    saveEvents(
-      events.map((e) =>
-        e.id === editingId ? { ...editForm, id: editingId, status: e.status, createdAt: e.createdAt } : e
-      )
-    );
+    await api("PATCH", `events?id=eq.${editingId}`, {
+      name: editForm.name,
+      hijri_date: editForm.hijriDate,
+      day: editForm.day,
+      phone: editForm.phone,
+      venue: editForm.venue,
+      map_link: editForm.mapLink,
+      notes: editForm.notes,
+    });
+    await loadEvents();
     setEditingId(null);
   };
 
@@ -206,7 +245,7 @@ export default function App() {
           </div>
           {events.length === 0 && <p style={styles.empty}>لا توجد طلبات بعد</p>}
           <div style={styles.tableWrap}>
-            {[...events].sort((a, b) => b.createdAt - a.createdAt).map((ev) => (
+            {events.map((ev) => (
               <div key={ev.id} style={styles.adminCard}>
                 {editingId === ev.id ? (
                   <div style={styles.editWrap}>
@@ -244,7 +283,7 @@ export default function App() {
                     </div>
                     <div style={styles.adminActions}>
                       <button style={styles.editBtn} onClick={() => startEdit(ev)}>✏️</button>
-                      <button style={{ ...styles.toggleBtn, background: ev.status === "approved" ? "#fff3cd" : "#d4edda", color: ev.status === "approved" ? "#856404" : "#155724" }} onClick={() => toggleApprove(ev.id)}>
+                      <button style={{ ...styles.toggleBtn, background: ev.status === "approved" ? "#fff3cd" : "#d4edda", color: ev.status === "approved" ? "#856404" : "#155724" }} onClick={() => toggleApprove(ev.id, ev.status)}>
                         {ev.status === "approved" ? "🚫" : "✅"}
                       </button>
                       <button style={styles.deleteBtn} onClick={() => deleteEvent(ev.id)}>🗑️</button>
