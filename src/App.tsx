@@ -64,6 +64,19 @@ const generateId = ():string => Date.now().toString(36)+Math.random().toString(3
 const generatePass = ():string => Math.random().toString(36).slice(2,8).toUpperCase();
 const getMonthName = (hijriDate:string):string => { const {m}=parseHijriParts(hijriDate); return m>0?HIJRI_MONTHS[m-1]:""; };
 
+// ── Poster font calculator ─────────────────────────────────────────
+// Snapchat story = 9:16 ratio, ~600px tall content area after header/footer
+// Each row height ≈ nameFontSize * 2.2 (name line + meta line + padding)
+const calcPosterFont = (count:number):{nameFz:number;metaFz:number;rowH:number} => {
+  const CONTENT_H = 580; // available px for list
+  // find largest font where all rows fit
+  for(const nameFz of [14,13,12,11,10,9,8]) {
+    const rowH = nameFz * 2.4 + 8;
+    if(rowH * count <= CONTENT_H) return {nameFz, metaFz:nameFz-1, rowH};
+  }
+  return {nameFz:7, metaFz:6, rowH:7*2.4+6};
+};
+
 export default function App() {
   const [page, setPage] = useState("home");
   const [events, setEvents] = useState<Event[]>([]);
@@ -103,8 +116,6 @@ export default function App() {
     setLoading(false);
   };
   useEffect(()=>{ loadEvents(); },[]);
-
-  // Close sidebar on outside click
   useEffect(()=>{
     const h=(e:MouseEvent)=>{ if(sidebarOpen&&sidebarRef.current&&!sidebarRef.current.contains(e.target as Node)) setSidebarOpen(false); };
     document.addEventListener("mousedown",h); return ()=>document.removeEventListener("mousedown",h);
@@ -167,7 +178,6 @@ export default function App() {
     await loadEvents(); setEditingId(null);
   };
 
-  // ── Event card renderer ───────────────────────────────────────
   const renderCard = (ev:Event) => {
     const isExp = expandedId===ev.id;
     const venueEl = ev.mapLink
@@ -196,7 +206,7 @@ export default function App() {
       <div key={ev.id} className="card" style={S.card}>
         <div style={S.cardHeader}>
           <h3 style={S.cardName}>{ev.name}</h3>
-          <button style={S.shareIconBtn} onClick={()=>setShareCardEvent(ev)} title="مشاركة"><ShareIcon/></button>
+          <button style={S.shareIconBtn} onClick={()=>setShareCardEvent(ev)}><ShareIcon/></button>
         </div>
         <div style={S.cardRow}><span style={S.cardIcon}>📅</span><span>{ev.day}، {ev.hijriDate}</span></div>
         <div style={S.cardRow}><span style={S.cardIcon}>📍</span>{venueEl}</div>
@@ -239,13 +249,11 @@ export default function App() {
   );
 
   return (
-    <div style={S.root} onClick={()=>closeDropdowns()}>
+    <div style={S.root} onClick={closeDropdowns}>
       <style>{css}</style>
 
-      {/* Sidebar overlay */}
       {sidebarOpen&&<div style={S.overlayBg} onClick={()=>setSidebarOpen(false)}/>}
 
-      {/* Sidebar */}
       <div ref={sidebarRef} style={{...S.sidebar,transform:sidebarOpen?"translateX(0)":"translateX(100%)"}}>
         <div style={S.sidebarHeader}>
           <span style={{fontWeight:800,fontSize:16,color:"#7a5a10"}}>{SITE_NAME}</span>
@@ -260,14 +268,12 @@ export default function App() {
         </div>
       </div>
 
-      {/* Nav */}
       <nav style={S.nav}>
         <button style={S.hamburger} onClick={e=>{e.stopPropagation();setSidebarOpen(true);}}><span/><span/><span/></button>
         <div style={S.navTitle}>{SITE_NAME}</div>
         <div style={{width:40}}/>
       </nav>
 
-      {/* HOME */}
       {page==="home"&&(
         <div style={S.container}>
           <div style={S.hero}>
@@ -281,24 +287,15 @@ export default function App() {
                 {allApproved.length>0&&<span style={S.countBadge}>{allApproved.length}</span>}
               </h2>
               <div style={{display:"flex",gap:6,alignItems:"center"}}>
-
-                {/* Search/Filter button */}
+                {/* Search */}
                 <div style={{position:"relative"}}>
-                  <button
-                    style={{...S.toolBtn,...(hasFilter?S.toolBtnActive:{})}}
-                    onClick={e=>{e.stopPropagation();setShowViewMenu(false);setShowFilter(v=>!v);}}
-                  >
+                  <button style={{...S.toolBtn,...(hasFilter?S.toolBtnActive:{})}} onClick={e=>{e.stopPropagation();setShowViewMenu(false);setShowFilter(v=>!v);}}>
                     <SearchIcon active={hasFilter}/>
                   </button>
                   {showFilter&&(
                     <div style={S.dropdown} onClick={e=>e.stopPropagation()}>
                       <p style={S.dropTitle}>بحث وتصفية</p>
-                      <input
-                        style={{...S.input,fontSize:12,marginBottom:8}}
-                        placeholder="بحث بالاسم أو المكان..."
-                        value={searchText}
-                        onChange={e=>setSearchText(e.target.value)}
-                      />
+                      <input style={{...S.input,fontSize:12,marginBottom:8}} placeholder="بحث بالاسم أو المكان..." value={searchText} onChange={e=>setSearchText(e.target.value)}/>
                       <select style={{...S.select,fontSize:12,marginBottom:8}} value={filterDay} onChange={e=>setFilterDay(e.target.value)}>
                         <option value="">كل الأيام</option>
                         {DAYS.map(d=><option key={d} value={d}>{d}</option>)}
@@ -307,43 +304,33 @@ export default function App() {
                         <option value="">كل الأشهر</option>
                         {HIJRI_MONTHS.map(m=><option key={m} value={m}>{m}</option>)}
                       </select>
-                      {hasFilter&&(
-                        <button style={{...S.cancelBtn,marginTop:8,width:"100%",fontSize:12,textAlign:"center" as const}} onClick={()=>{setSearchText("");setFilterDay("");setFilterMonth("");}}>
-                          مسح التصفية
-                        </button>
-                      )}
+                      {hasFilter&&<button style={{...S.cancelBtn,marginTop:8,width:"100%",fontSize:12,textAlign:"center" as const}} onClick={()=>{setSearchText("");setFilterDay("");setFilterMonth("");}}>مسح التصفية</button>}
                     </div>
                   )}
                 </div>
-
-                {/* View toggle button */}
+                {/* View */}
                 <div style={{position:"relative"}}>
-                  <button
-                    style={S.toolBtn}
-                    onClick={e=>{e.stopPropagation();setShowFilter(false);setShowViewMenu(v=>!v);}}
-                  >
+                  <button style={S.toolBtn} onClick={e=>{e.stopPropagation();setShowFilter(false);setShowViewMenu(v=>!v);}}>
                     {viewMode==="compact"
-                      ? <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#888" strokeWidth="2.2" strokeLinecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
-                      : <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#888" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="8" height="8" rx="1"/><rect x="13" y="3" width="8" height="8" rx="1"/><rect x="3" y="13" width="8" height="8" rx="1"/><rect x="13" y="13" width="8" height="8" rx="1"/></svg>
+                      ?<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#888" strokeWidth="2.2" strokeLinecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+                      :<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#888" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="8" height="8" rx="1"/><rect x="13" y="3" width="8" height="8" rx="1"/><rect x="3" y="13" width="8" height="8" rx="1"/><rect x="13" y="13" width="8" height="8" rx="1"/></svg>
                     }
                   </button>
                   {showViewMenu&&(
-                    <div style={{...S.dropdown,width:150}} onClick={e=>e.stopPropagation()}>
+                    <div style={{...S.dropdown,width:150,padding:6}} onClick={e=>e.stopPropagation()}>
                       <button style={{...S.viewOpt,...(viewMode==="full"?S.viewOptActive:{})}} onClick={()=>setView("full")}>
-                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="5" rx="1"/><rect x="3" y="10" width="18" height="5" rx="1"/><rect x="3" y="17" width="18" height="5" rx="1"/></svg>
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><rect x="3" y="3" width="18" height="5" rx="1"/><rect x="3" y="10" width="18" height="5" rx="1"/><rect x="3" y="17" width="18" height="5" rx="1"/></svg>
                         عرض كامل
                       </button>
                       <button style={{...S.viewOpt,...(viewMode==="compact"?S.viewOptActive:{})}} onClick={()=>setView("compact")}>
-                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
                         عرض مضغوط
                       </button>
                     </div>
                   )}
                 </div>
-
               </div>
             </div>
-
             {loading&&<p style={S.empty}>جاري التحميل...</p>}
             {!loading&&activeApproved.length===0&&<p style={S.empty}>{hasFilter?"لا توجد نتائج":"لا توجد مناسبات معتمدة حتى الآن"}</p>}
             <div style={S.grid}>{activeApproved.map(renderCard)}</div>
@@ -354,7 +341,6 @@ export default function App() {
         </div>
       )}
 
-      {/* REGISTER */}
       {page==="register"&&(
         <div style={S.container}>
           <div style={S.formWrap}>
@@ -382,25 +368,30 @@ export default function App() {
         </div>
       )}
 
-      {/* NOTIFY */}
+      {/* NOTIFY — updated message */}
       {page==="notify"&&submittedEvent&&(
         <div style={S.container}>
           <div style={S.formWrap}>
-            <div style={{textAlign:"center",padding:"16px 0 20px"}}>
-              <div style={{fontSize:44,marginBottom:12}}>✅</div>
-              <h3 style={{color:"#2e7d32",margin:"0 0 8px",fontSize:18,fontWeight:800}}>تم إرسال طلبك بنجاح!</h3>
-              <p style={{color:"#888",fontSize:14,margin:"0 0 24px",lineHeight:1.7}}>سيتم مراجعة طلبك من قبل الإدارة والموافقة عليه قريباً.</p>
+            <div style={{textAlign:"center",padding:"20px 0"}}>
+              <div style={{fontSize:42,marginBottom:14}}>✅</div>
+              <h3 style={{color:"#1a1208",margin:"0 0 10px",fontSize:18,fontWeight:800}}>تم حفظ بياناتك بنجاح</h3>
+              <p style={{color:"#666",fontSize:14,margin:"0 0 6px",lineHeight:1.7}}>
+                يرجى إرسال إشعار للإدارة
+              </p>
+              <p style={{color:"#666",fontSize:14,margin:"0 0 24px",lineHeight:1.7}}>
+                حتى يتم اعتماد طلبك
+              </p>
               <button style={S.waNotifyBtn} onClick={()=>notifyAdmin(submittedEvent)}>
-                <WaIcon/>&nbsp; أرسل إشعاراً للإدارة عبر واتساب
+                <WaIcon/>&nbsp; إرسال إشعار للإدارة عبر واتساب
               </button>
-              <p style={{color:"#ccc",fontSize:12,marginTop:8}}>اضغط الزر لإعلام الإدارة حتى يتم اعتماد طلبك بشكل أسرع</p>
-              <button style={{...S.back,marginTop:20,textAlign:"center" as const,width:"100%",marginBottom:0}} onClick={()=>setPage("home")}>العودة للرئيسية</button>
+              <button style={{...S.back,marginTop:20,textAlign:"center" as const,width:"100%",marginBottom:0,color:"#aaa",fontSize:12}} onClick={()=>setPage("home")}>
+                العودة للرئيسية
+              </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* LOGIN */}
       {page==="login"&&(
         <div style={S.container}>
           <div style={S.formWrap}>
@@ -413,7 +404,6 @@ export default function App() {
         </div>
       )}
 
-      {/* ADMIN */}
       {page==="admin"&&isAdmin&&(
         <div style={S.container}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
@@ -471,48 +461,61 @@ export default function App() {
   );
 }
 
-// ── Poster ────────────────────────────────────────────────────────
+// ── Poster — fixed 9:16, auto font ───────────────────────────────
 function PosterModal({events,onClose}:{events:Event[];onClose:()=>void}) {
   const count = events.length;
-  // Auto-scale: fit up to 20 events
-  const fs = count<=5?14:count<=8?13:count<=12?11:count<=16?10:9;
-  const rp = count<=5?10:count<=10?7:count<=15?5:4;
+  const {nameFz, metaFz, rowH} = calcPosterFont(count);
+
+  // Snapchat story ratio: width 360px → height 640px (9:16)
+  const W = 340;
+  const H = Math.round(W * 16 / 9); // = 604px
 
   return (
     <div style={PM.overlay} onClick={onClose}>
-      <div style={PM.wrap} onClick={e=>e.stopPropagation()}>
-        <div style={PM.bar}>
-          <span style={{color:"#fff",fontSize:11}}>صوّر الشاشة لمشاركة البوستر</span>
-          <button style={PM.closeBtn} onClick={onClose}>✕</button>
-        </div>
-        <div style={PM.scroll}>
-          <div style={PM.poster}>
-            <div style={PM.topStripe}/>
-            <div style={PM.header}>
-              <p style={PM.basmala}>﷽</p>
-              <h1 style={PM.title}>{SITE_NAME}</h1>
-              <p style={PM.sub}>قبيلة الخيرة — مركز دوقة</p>
-            </div>
-            <div style={PM.divider}>— ❖ —</div>
-            <div style={PM.list}>
-              {events.map((ev,i)=>(
-                <div key={ev.id} style={{...PM.row,background:i%2===0?"#fff":"#fdfaf3",padding:`${rp}px 10px`}}>
-                  <div style={PM.num}>{i+1}</div>
-                  <div style={PM.info}>
-                    <span style={{...PM.name,fontSize:fs}}>{ev.name}</span>
-                    <span style={{...PM.meta,fontSize:fs-2}}>{ev.day} · {ev.hijriDate} · {ev.venue}</span>
-                  </div>
-                </div>
-              ))}
-            </div>
-            <div style={PM.divider}>— ❖ —</div>
-            <div style={PM.foot}>
-              <p style={PM.footText}>نبارك للعرسان ونتمنى لهم حياة سعيدة مباركة</p>
-              <p style={PM.footSite}>{SITE_NAME} — مساهمة مجتمعية</p>
-            </div>
-            <div style={PM.topStripe}/>
+      <div onClick={e=>e.stopPropagation()}>
+        <p style={{color:"#fff",fontSize:11,textAlign:"center",marginBottom:8}}>صوّر الشاشة لمشاركة البوستر</p>
+        <div style={{...PM.poster, width:W, height:H}}>
+          {/* Top stripe */}
+          <div style={PM.stripe}/>
+          {/* Header */}
+          <div style={PM.header}>
+            <p style={PM.basmala}>﷽</p>
+            <h1 style={PM.title}>{SITE_NAME}</h1>
+            <p style={PM.sub}>قبيلة الخيرة — مركز دوقة</p>
           </div>
+          <div style={PM.divider}>— ❖ —</div>
+          {/* Events list — fills remaining space */}
+          <div style={{flex:1,overflow:"hidden",padding:"0 10px"}}>
+            {events.map((ev,i)=>(
+              <div key={ev.id} style={{
+                display:"flex", alignItems:"flex-start", gap:6,
+                height:rowH, overflow:"hidden",
+                background:i%2===0?"#ffffff":"#fdfaf3",
+                borderBottom:"1px solid #f0e8d0",
+                padding:"0 4px",
+              }}>
+                <div style={{
+                  width:16, height:16, borderRadius:"50%",
+                  background:"#c9a227", color:"#fff",
+                  display:"flex", alignItems:"center", justifyContent:"center",
+                  fontSize:8, fontWeight:800, flexShrink:0, marginTop:3,
+                }}>{i+1}</div>
+                <div style={{flex:1,overflow:"hidden"}}>
+                  <div style={{fontSize:nameFz,fontWeight:800,color:"#1a1208",lineHeight:1.3,overflow:"hidden",whiteSpace:"nowrap" as const,textOverflow:"ellipsis"}}>{ev.name}</div>
+                  <div style={{fontSize:metaFz,color:"#555",lineHeight:1.3,overflow:"hidden",whiteSpace:"nowrap" as const,textOverflow:"ellipsis"}}>{ev.hijriDate} · {ev.venue}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+          <div style={PM.divider}>— ❖ —</div>
+          {/* Footer */}
+          <div style={PM.foot}>
+            <p style={PM.footText}>نبارك للعرسان ونتمنى لهم حياة سعيدة مباركة</p>
+            <p style={PM.footSite}>{SITE_NAME} — مساهمة مجتمعية</p>
+          </div>
+          <div style={PM.stripe}/>
         </div>
+        <button style={{background:"rgba(255,255,255,0.15)",border:"none",color:"#fff",borderRadius:8,padding:"8px 20px",cursor:"pointer",fontSize:12,fontFamily:"inherit",marginTop:10,width:W}} onClick={onClose}>إغلاق</button>
       </div>
     </div>
   );
@@ -628,7 +631,7 @@ const S: Record<string,React.CSSProperties> = {
   select:{width:"100%",padding:"9px 12px",border:"1.5px solid #e0cfa0",borderRadius:8,fontSize:13,background:"#fffdf7",color:"#1a1208",outline:"none",boxSizing:"border-box",fontFamily:"inherit"},
   textarea:{width:"100%",padding:"9px 12px",border:"1.5px solid #e0cfa0",borderRadius:8,fontSize:13,background:"#fffdf7",color:"#1a1208",outline:"none",boxSizing:"border-box",fontFamily:"inherit",resize:"vertical"},
   error:{color:"#c0392b",fontSize:12,textAlign:"center",marginBottom:8},
-  waNotifyBtn:{display:"flex",alignItems:"center",justifyContent:"center",gap:8,background:"#25d366",color:"#fff",border:"none",borderRadius:10,padding:"12px",cursor:"pointer",fontFamily:"inherit",fontWeight:700,fontSize:14,width:"100%"},
+  waNotifyBtn:{display:"flex",alignItems:"center",justifyContent:"center",gap:8,background:"#25d366",color:"#fff",border:"none",borderRadius:10,padding:"14px",cursor:"pointer",fontFamily:"inherit",fontWeight:800,fontSize:15,width:"100%"},
   back:{background:"none",border:"none",cursor:"pointer",color:"#8b6914",fontSize:13,fontWeight:600,padding:0,marginBottom:10,fontFamily:"inherit",display:"block"},
   adminCard:{background:"#fff",borderRadius:10,padding:"11px 13px",border:"1px solid #e8d9b5",marginBottom:8},
   adminCardInner:{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8},
@@ -647,32 +650,20 @@ const S: Record<string,React.CSSProperties> = {
   footer:{textAlign:"center",padding:"16px",color:"#ccc",fontSize:12,borderTop:"1px solid #e8d9b5",marginTop:24},
 };
 
-// Poster styles
 const PM: Record<string,React.CSSProperties> = {
-  overlay:{position:"fixed",inset:0,background:"rgba(0,0,0,0.7)",zIndex:500,display:"flex",alignItems:"flex-start",justifyContent:"center",padding:"16px",overflowY:"auto"},
-  wrap:{width:"100%",maxWidth:360,marginTop:8},
-  bar:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8},
-  closeBtn:{background:"rgba(255,255,255,0.2)",border:"none",color:"#fff",borderRadius:"50%",width:28,height:28,cursor:"pointer",fontSize:13},
-  scroll:{borderRadius:12,overflow:"hidden"},
-  poster:{background:"#fff",fontFamily:"'Tajawal',sans-serif",direction:"rtl"},
-  topStripe:{height:6,background:"linear-gradient(to right,#c9a227,#f0d060,#c9a227)"},
-  header:{textAlign:"center",padding:"14px 14px 8px"},
-  basmala:{fontSize:14,color:"#c9a227",margin:"0 0 5px"},
-  title:{fontSize:20,fontWeight:900,color:"#6b4d0e",margin:"0 0 3px"},
-  sub:{fontSize:11,color:"#999",margin:0},
-  divider:{textAlign:"center",color:"#c9a227",fontSize:11,letterSpacing:4,padding:"5px 0",background:"#fff"},
-  list:{background:"#fff"},
-  row:{display:"flex",alignItems:"flex-start",gap:8,borderBottom:"1px solid #f0e8d0"},
-  num:{width:18,height:18,borderRadius:"50%",background:"#c9a227",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",fontSize:9,fontWeight:800,flexShrink:0,marginTop:2},
-  info:{flex:1},
-  name:{display:"block",fontWeight:800,color:"#1a1208",marginBottom:1},
-  meta:{display:"block",color:"#555"},
-  foot:{textAlign:"center",padding:"10px 14px 12px"},
-  footText:{fontSize:11,color:"#555",margin:"0 0 3px"},
-  footSite:{fontSize:10,color:"#c9a227",fontWeight:700,margin:0},
+  overlay:{position:"fixed",inset:0,background:"rgba(0,0,0,0.75)",zIndex:500,display:"flex",alignItems:"center",justifyContent:"center",padding:16},
+  poster:{background:"#ffffff",fontFamily:"'Tajawal',sans-serif",direction:"rtl",borderRadius:12,overflow:"hidden",boxShadow:"0 8px 40px rgba(0,0,0,0.4)",display:"flex",flexDirection:"column"},
+  stripe:{height:6,background:"linear-gradient(to right,#c9a227,#f0d060,#c9a227)",flexShrink:0},
+  header:{textAlign:"center",padding:"10px 12px 6px",flexShrink:0},
+  basmala:{fontSize:13,color:"#c9a227",margin:"0 0 3px"},
+  title:{fontSize:18,fontWeight:900,color:"#6b4d0e",margin:"0 0 2px"},
+  sub:{fontSize:10,color:"#999",margin:0},
+  divider:{textAlign:"center",color:"#c9a227",fontSize:10,letterSpacing:3,padding:"4px 0",flexShrink:0},
+  foot:{textAlign:"center",padding:"6px 12px 8px",flexShrink:0},
+  footText:{fontSize:10,color:"#555",margin:"0 0 2px"},
+  footSite:{fontSize:9,color:"#c9a227",fontWeight:700,margin:0},
 };
 
-// Share card styles
 const MC: Record<string,React.CSSProperties> = {
   overlay:{position:"fixed",inset:0,background:"rgba(0,0,0,0.65)",zIndex:500,display:"flex",alignItems:"center",justifyContent:"center",padding:16},
   modal:{background:"#fff",borderRadius:18,padding:16,width:"100%",maxWidth:320,position:"relative",maxHeight:"90vh",overflowY:"auto"},
