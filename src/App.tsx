@@ -28,7 +28,7 @@ const api = async (method:string, path:string, body?:object) => {
   return res.json();
 };
 const dbToEvent = (r:Record<string,unknown>):Event => ({
-  id:r.id as string, name:r.name as string, hijriDate:r.hijri_date as string,
+  id:r.id as string, name:r.name as string, hijriDate:normalizeHijri(r.hijri_date as string),
   day:r.day as string, phone:r.phone as string, venue:r.venue as string,
   mapLink:(r.map_link as string)||"", notes:(r.notes as string)||"",
   status:r.status as "pending"|"approved", createdAt:r.created_at as number,
@@ -39,41 +39,43 @@ const parseHijriParts = (d:string):{y:number;m:number;day:number} => {
   const clean = d.replace(/\s*هـ\s*/g,"").trim();
   const parts = clean.split("/").map(p=>parseInt(p.trim())||0);
   if(parts.length < 3) return {y:0,m:0,day:0};
-  // الرقم اللي فيه 4 خانات هو السنة دائماً
   const yearIdx = parts.findIndex(p=>p>1000);
   if(yearIdx===2) return {y:parts[2],m:parts[1],day:parts[0]};
   return {y:parts[0],m:parts[1],day:parts[2]};
 };
-
 const normalizeHijri = (d:string):string => {
+  if(!d) return d;
   const {y,m,day} = parseHijriParts(d);
   if(!y) return d;
   return `${y}/${String(m).padStart(2,"0")}/${String(day).padStart(2,"0")} هـ`;
 };
-
 const getHijriToday = ():{y:number;m:number;day:number} => {
   try {
     const parts = new Intl.DateTimeFormat("en-u-ca-islamic",{year:"numeric",month:"2-digit",day:"2-digit"}).formatToParts(new Date());
-    const y=parseInt(parts.find(p=>p.type==="year")?.value||"1447");
-    const m=parseInt(parts.find(p=>p.type==="month")?.value||"01");
-    const d=parseInt(parts.find(p=>p.type==="day")?.value||"01");
-    return {y,m,day:d};
+    return {y:parseInt(parts.find(p=>p.type==="year")?.value||"1447"),m:parseInt(parts.find(p=>p.type==="month")?.value||"01"),day:parseInt(parts.find(p=>p.type==="day")?.value||"01")};
   } catch { return {y:1447,m:10,day:1}; }
 };
-
 const isPast = (hijriDate:string):boolean => {
-  const ev = parseHijriParts(hijriDate);
-  const tod = getHijriToday();
-  if(ev.y !== tod.y) return ev.y < tod.y;
-  if(ev.m !== tod.m) return ev.m < tod.m;
-  return ev.day < tod.day;
+  const ev=parseHijriParts(hijriDate), tod=getHijriToday();
+  if(ev.y!==tod.y) return ev.y<tod.y;
+  if(ev.m!==tod.m) return ev.m<tod.m;
+  return ev.day<tod.day;
 };
-
 const hijriToNum = (d:string):number => { const p=parseHijriParts(d); return p.y*10000+p.m*100+p.day; };
 const sortByHijri = (a:Event,b:Event) => hijriToNum(a.hijriDate)-hijriToNum(b.hijriDate);
 const formatHijri = (y:string,m:string,d:string):string => `${y}/${String(m).padStart(2,"0")}/${String(d).padStart(2,"0")} هـ`;
 const generateId = ():string => Date.now().toString(36)+Math.random().toString(36).slice(2);
 const generatePass = ():string => Math.random().toString(36).slice(2,8).toUpperCase();
+const getMonthName = (hijriDate:string):string => { const {m}=parseHijriParts(hijriDate); return m>0?HIJRI_MONTHS[m-1]:""; };
+
+// ── html2canvas loader ────────────────────────────────────────────
+const loadH2C = () => new Promise<(el:HTMLElement,o?:object)=>Promise<HTMLCanvasElement>>(res=>{
+  if((window as any).html2canvas){res((window as any).html2canvas);return;}
+  const s=document.createElement("script");
+  s.src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js";
+  s.onload=()=>res((window as any).html2canvas);
+  document.head.appendChild(s);
+});
 
 // ── Main App ──────────────────────────────────────────────────────
 export default function App() {
@@ -88,14 +90,16 @@ export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [shareCardEvent, setShareCardEvent] = useState<Event|null>(null);
   const [showPoster, setShowPoster] = useState(false);
+  const [showFilter, setShowFilter] = useState(false);
+  const [searchText, setSearchText] = useState("");
+  const [filterDay, setFilterDay] = useState("");
+  const [filterMonth, setFilterMonth] = useState("");
   const sidebarRef = useRef<HTMLDivElement>(null);
+  const filterRef = useRef<HTMLDivElement>(null);
 
   // Admin
   const [isAdmin, setIsAdmin] = useState(()=>sessionStorage.getItem("manasbat_admin")==="1");
-  const [adminAccounts, setAdminAccounts] = useState<AdminAccount[]>(()=>{
-    const s=localStorage.getItem("manasbat_admins");
-    return s?JSON.parse(s):[{id:"1",label:"المدير الرئيسي",password:"admin1234"}];
-  });
+  const [adminAccounts, setAdminAccounts] = useState<AdminAccount[]>(()=>{ const s=localStorage.getItem("manasbat_admins"); return s?JSON.parse(s):[{id:"1",label:"المدير الرئيسي",password:"admin1234"}]; });
   const [loginPass, setLoginPass] = useState("");
   const [loginError, setLoginError] = useState("");
   const [adminTab, setAdminTab] = useState<"active"|"archived"|"accounts">("active");
@@ -110,35 +114,38 @@ export default function App() {
   const saveAdmins = (a:AdminAccount[]) => { setAdminAccounts(a); localStorage.setItem("manasbat_admins",JSON.stringify(a)); };
 
   const loadEvents = async () => {
-    try {
-      const rows=await api("GET","events?order=created_at.desc");
-      if(Array.isArray(rows)) setEvents(rows.map(r=>({...dbToEvent(r),hijriDate:normalizeHijri(dbToEvent(r).hijriDate)})));
-    } catch {}
+    try { const rows=await api("GET","events?order=created_at.desc"); if(Array.isArray(rows)) setEvents(rows.map(dbToEvent)); } catch {}
     setLoading(false);
   };
-
   useEffect(()=>{ loadEvents(); },[]);
   useEffect(()=>{
-    const h=(e:MouseEvent)=>{ if(sidebarOpen&&sidebarRef.current&&!sidebarRef.current.contains(e.target as Node)) setSidebarOpen(false); };
+    const h=(e:MouseEvent)=>{
+      if(sidebarOpen&&sidebarRef.current&&!sidebarRef.current.contains(e.target as Node)) setSidebarOpen(false);
+      if(showFilter&&filterRef.current&&!filterRef.current.contains(e.target as Node)) setShowFilter(false);
+    };
     document.addEventListener("mousedown",h); return ()=>document.removeEventListener("mousedown",h);
-  },[sidebarOpen]);
+  },[sidebarOpen,showFilter]);
 
   const setView = (v:"full"|"compact") => { setViewMode(v); localStorage.setItem("manasbat_view",v); };
   const nav = (p:string) => { setPage(p); setSidebarOpen(false); };
 
-  // Filters
-  const activeApproved = events.filter(e=>e.status==="approved"&&!isPast(e.hijriDate)).sort(sortByHijri);
+  const allApproved = events.filter(e=>e.status==="approved"&&!isPast(e.hijriDate)).sort(sortByHijri);
+  const activeApproved = allApproved.filter(e=>{
+    const matchSearch = !searchText || e.name.includes(searchText) || e.venue.includes(searchText);
+    const matchDay = !filterDay || e.day===filterDay;
+    const matchMonth = !filterMonth || getMonthName(e.hijriDate)===filterMonth;
+    return matchSearch&&matchDay&&matchMonth;
+  });
   const adminActive = events.filter(e=>!isPast(e.hijriDate)).sort(sortByHijri);
   const archivedEvents = events.filter(e=>isPast(e.hijriDate)).sort((a,b)=>hijriToNum(b.hijriDate)-hijriToNum(a.hijriDate));
+  const hasFilter = !!searchText||!!filterDay||!!filterMonth;
 
-  // Login
   const handleLogin = () => {
     if(adminAccounts.find(a=>a.password===loginPass)){ setIsAdmin(true); sessionStorage.setItem("manasbat_admin","1"); nav("admin"); setLoginError(""); setLoginPass(""); }
     else setLoginError("كلمة المرور غير صحيحة");
   };
   const handleLogout = () => { setIsAdmin(false); sessionStorage.removeItem("manasbat_admin"); nav("home"); };
 
-  // Accounts
   const addAdmin = () => {
     if(!newAccLabel||!generatedPass){ setAccError("يرجى إدخال الاسم وتوليد كلمة مرور"); return; }
     saveAdmins([...adminAccounts,{id:generateId(),label:newAccLabel,password:generatedPass}]);
@@ -147,7 +154,6 @@ export default function App() {
   const deleteAdmin = (id:string) => { if(adminAccounts.length<=1) return; saveAdmins(adminAccounts.filter(a=>a.id!==id)); };
   const saveEditPass = (id:string) => { if(!editPassVal||editPassVal.length<4) return; saveAdmins(adminAccounts.map(a=>a.id===id?{...a,password:editPassVal}:a)); setEditPassId(null); setEditPassVal(""); };
 
-  // Form submit
   const handleSubmit = async () => {
     if(!form.name||!form.hijriYear||!form.hijriMonth||!form.hijriDay||!form.day||!form.phone||!form.venue){ setFormError("يرجى تعبئة جميع الحقول الإلزامية"); return; }
     const hijriDate=formatHijri(form.hijriYear,form.hijriMonth,form.hijriDay);
@@ -156,7 +162,6 @@ export default function App() {
     await loadEvents(); setSubmittedEvent(newEv); setForm(initialForm); setFormError(""); setPage("notify");
   };
 
-  // WhatsApp
   const notifyAdmin = (ev:Event) => {
     const text=`📋 *طلب موافقة - مناسبة جديدة*\n\nالاسم: ${ev.name}\nالتاريخ: ${ev.day}، ${ev.hijriDate}\nالمكان: ${ev.venue}\nالجوال: ${ev.phone}${ev.notes?`\nملاحظات: ${ev.notes}`:""}\n\nيرجى مراجعة الطلب والموافقة عليه.`;
     window.open(`https://wa.me/${ADMIN_WA}?text=${encodeURIComponent(text)}`,"_blank");
@@ -166,7 +171,6 @@ export default function App() {
     window.open(`https://wa.me/?text=${encodeURIComponent(text)}`,"_blank");
   };
 
-  // Admin actions
   const toggleApprove = async (id:string,current:string) => { await api("PATCH",`events?id=eq.${id}`,{status:current==="approved"?"pending":"approved"}); await loadEvents(); };
   const deleteEvent = async (id:string) => { await api("DELETE",`events?id=eq.${id}`); await loadEvents(); };
   const startEdit = (ev:Event) => {
@@ -179,7 +183,6 @@ export default function App() {
     await loadEvents(); setEditingId(null);
   };
 
-  // ── Event Cards ───────────────────────────────────────────────
   const renderCard = (ev:Event) => {
     const isExp = expandedId===ev.id;
     if(viewMode==="compact") return (
@@ -192,7 +195,10 @@ export default function App() {
         {isExp&&(
           <div style={S.compactDetails}>
             <div style={S.cardRow}><span style={S.cardIcon}>📅</span><span>{ev.day}، {ev.hijriDate}</span></div>
-            <div style={S.cardRow}><span style={S.cardIcon}>📍</span><span>{ev.venue}</span>{ev.mapLink&&<a href={ev.mapLink} target="_blank" rel="noreferrer" style={S.mapLink}>خريطة</a>}</div>
+            <div style={S.cardRow}>
+              <span style={S.cardIcon}>📍</span><span>{ev.venue}</span>
+              {ev.mapLink&&<a href={ev.mapLink} target="_blank" rel="noreferrer" style={S.mapIconLink} onClick={e=>e.stopPropagation()}><MapsIcon/></a>}
+            </div>
             <div style={S.cardRow}><span style={S.cardIcon}>📞</span><span>{ev.phone}</span></div>
             {ev.notes&&<p style={S.notesText}>{ev.notes}</p>}
             <button style={S.shareBtn} onClick={e=>{e.stopPropagation();setShareCardEvent(ev);}}>مشاركة</button>
@@ -204,12 +210,13 @@ export default function App() {
       <div key={ev.id} className="card" style={S.card}>
         <div style={S.cardHeader}>
           <h3 style={S.cardName}>{ev.name}</h3>
-          <button style={S.shareIconBtn} onClick={()=>setShareCardEvent(ev)} title="مشاركة">
-            <ShareIcon/>
-          </button>
+          <button style={S.shareIconBtn} onClick={()=>setShareCardEvent(ev)} title="مشاركة"><ShareIcon/></button>
         </div>
         <div style={S.cardRow}><span style={S.cardIcon}>📅</span><span>{ev.day}، {ev.hijriDate}</span></div>
-        <div style={S.cardRow}><span style={S.cardIcon}>📍</span><span>{ev.venue}</span>{ev.mapLink&&<a href={ev.mapLink} target="_blank" rel="noreferrer" style={S.mapLink}>خريطة</a>}</div>
+        <div style={S.cardRow}>
+          <span style={S.cardIcon}>📍</span><span>{ev.venue}</span>
+          {ev.mapLink&&<a href={ev.mapLink} target="_blank" rel="noreferrer" style={S.mapIconLink}><MapsIcon/></a>}
+        </div>
         <div style={S.cardRow}><span style={S.cardIcon}>📞</span><span>{ev.phone}</span></div>
         {ev.notes&&<p style={S.notesText}>{ev.notes}</p>}
       </div>
@@ -233,15 +240,18 @@ export default function App() {
         <div style={S.adminCardInner}>
           <div style={S.adminCardInfo}>
             <span style={{...S.statusBadge,background:ev.status==="approved"?"#e8f5e9":"#fff8e1",color:ev.status==="approved"?"#2e7d32":"#856404"}}>{ev.status==="approved"?"مُعتمدة":"قيد المراجعة"}</span>
-            <strong style={{fontSize:15}}>{ev.name}</strong>
-            <span style={{color:"#888",fontSize:13}}>{ev.day}، {ev.hijriDate}</span>
-            <span style={{color:"#666",fontSize:13}}>📍 {ev.venue} — 📞 {ev.phone}</span>
-            {ev.notes&&<span style={{color:"#aaa",fontSize:12}}>{ev.notes}</span>}
+            <strong style={{fontSize:14}}>{ev.name}</strong>
+            <span style={{color:"#777",fontSize:12}}>{ev.day}، {ev.hijriDate}</span>
+            <span style={{color:"#777",fontSize:12}}>📍 {ev.venue}</span>
+            <span style={{color:"#777",fontSize:12}}>📞 {ev.phone}</span>
+            {ev.notes&&<span style={{color:"#bbb",fontSize:11}}>{ev.notes}</span>}
           </div>
           <div style={S.adminActions}>
-            <button style={S.editBtn} onClick={()=>startEdit(ev)}>✏️</button>
-            <button style={{...S.toggleBtn,background:ev.status==="approved"?"#fff8e1":"#e8f5e9",color:ev.status==="approved"?"#856404":"#2e7d32"}} onClick={()=>toggleApprove(ev.id,ev.status)}>{ev.status==="approved"?"🚫":"✅"}</button>
-            <button style={S.deleteBtn} onClick={()=>deleteEvent(ev.id)}>🗑️</button>
+            <button style={S.adminEditBtn} onClick={()=>startEdit(ev)} title="تعديل"><EditIcon/></button>
+            <button style={{...S.adminToggleBtn,background:ev.status==="approved"?"#fff8e1":"#e8f5e9",color:ev.status==="approved"?"#856404":"#2e7d32",borderColor:ev.status==="approved"?"#e8d9b5":"#c8e6c9"}} onClick={()=>toggleApprove(ev.id,ev.status)} title={ev.status==="approved"?"إخفاء":"اعتماد"}>
+              {ev.status==="approved"?"✕":"✓"}
+            </button>
+            <button style={S.adminDeleteBtn} onClick={()=>deleteEvent(ev.id)} title="حذف"><TrashIcon/></button>
           </div>
         </div>
       )}
@@ -252,8 +262,8 @@ export default function App() {
     <div style={S.root}>
       <style>{css}</style>
 
-      {/* Sidebar */}
-      {sidebarOpen&&<div style={S.overlayBg} onClick={()=>setSidebarOpen(false)}/>}
+      {(sidebarOpen||showFilter)&&<div style={S.overlayBg} onClick={()=>{setSidebarOpen(false);setShowFilter(false);}}/>}
+
       <div ref={sidebarRef} style={{...S.sidebar,transform:sidebarOpen?"translateX(0)":"translateX(100%)"}}>
         <div style={S.sidebarHeader}>
           <span style={{fontWeight:800,fontSize:16,color:"#7a5a10"}}>{SITE_NAME}</span>
@@ -261,24 +271,19 @@ export default function App() {
         </div>
         <button style={S.sideLink} onClick={()=>nav("home")}>الرئيسية</button>
         <button style={S.sideLink} onClick={()=>nav("register")}>تسجيل مناسبة</button>
-        {isAdmin
-          ?<button style={S.sideLink} onClick={()=>nav("admin")}>لوحة التحكم</button>
-          :<button style={S.sideLink} onClick={()=>nav("login")}>تسجيل الدخول</button>
-        }
+        {isAdmin?<button style={S.sideLink} onClick={()=>nav("admin")}>لوحة التحكم</button>:<button style={S.sideLink} onClick={()=>nav("login")}>تسجيل الدخول</button>}
         {isAdmin&&<button style={{...S.sideLink,color:"#c0392b"}} onClick={handleLogout}>تسجيل الخروج</button>}
         <div style={{borderTop:"1px solid #e8d9b5",marginTop:"auto",paddingTop:12}}>
           <a href={`https://wa.me/${ADMIN_WA}`} target="_blank" rel="noreferrer" style={{...S.sideLink,textDecoration:"none",display:"block"}}>تواصل معنا</a>
         </div>
       </div>
 
-      {/* Nav */}
       <nav style={S.nav}>
         <button style={S.hamburger} onClick={()=>setSidebarOpen(true)}><span/><span/><span/></button>
         <div style={S.navTitle}>{SITE_NAME}</div>
         <div style={{width:40}}/>
       </nav>
 
-      {/* HOME */}
       {page==="home"&&(
         <div style={S.container}>
           <div style={S.hero}>
@@ -287,23 +292,42 @@ export default function App() {
           </div>
           <div style={S.section}>
             <div style={S.sectionTitleRow}>
-              <h2 style={S.sectionTitle}>المناسبات المعتمدة</h2>
-              <div style={S.viewToggle}>
+              <h2 style={S.sectionTitle}>المناسبات المعتمدة {allApproved.length>0&&<span style={S.countBadge}>{allApproved.length}</span>}</h2>
+              <div style={{display:"flex",gap:4,alignItems:"center"}}>
+                <div ref={filterRef} style={{position:"relative"}}>
+                  <button style={{...S.viewBtn,...(hasFilter?S.viewBtnActive:{})}} onClick={()=>setShowFilter(v=>!v)} title="بحث وتصفية">
+                    <FilterIcon active={hasFilter}/>
+                  </button>
+                  {showFilter&&(
+                    <div style={S.filterPanel}>
+                      <p style={S.filterTitle}>بحث وتصفية</p>
+                      <input style={{...S.input,marginBottom:10,fontSize:12}} placeholder="بحث بالاسم أو المكان..." value={searchText} onChange={e=>setSearchText(e.target.value)}/>
+                      <select style={{...S.select,marginBottom:10,fontSize:12}} value={filterDay} onChange={e=>setFilterDay(e.target.value)}>
+                        <option value="">كل الأيام</option>
+                        {DAYS.map(d=><option key={d} value={d}>{d}</option>)}
+                      </select>
+                      <select style={{...S.select,fontSize:12}} value={filterMonth} onChange={e=>setFilterMonth(e.target.value)}>
+                        <option value="">كل الأشهر</option>
+                        {HIJRI_MONTHS.map(m=><option key={m} value={m}>{m}</option>)}
+                      </select>
+                      {hasFilter&&<button style={{...S.cancelBtn,marginTop:10,width:"100%",textAlign:"center" as const,fontSize:12}} onClick={()=>{setSearchText("");setFilterDay("");setFilterMonth("");}}>مسح التصفية</button>}
+                    </div>
+                  )}
+                </div>
                 <button style={{...S.viewBtn,...(viewMode==="full"?S.viewBtnActive:{})}} onClick={()=>setView("full")} title="عرض كامل">☰</button>
                 <button style={{...S.viewBtn,...(viewMode==="compact"?S.viewBtnActive:{})}} onClick={()=>setView("compact")} title="عرض مضغوط">≡</button>
               </div>
             </div>
             {loading&&<p style={S.empty}>جاري التحميل...</p>}
-            {!loading&&activeApproved.length===0&&<p style={S.empty}>لا توجد مناسبات معتمدة حتى الآن</p>}
+            {!loading&&activeApproved.length===0&&<p style={S.empty}>{hasFilter?"لا توجد نتائج":"لا توجد مناسبات معتمدة حتى الآن"}</p>}
             <div style={S.grid}>{activeApproved.map(renderCard)}</div>
-            {activeApproved.length>0&&(
+            {allApproved.length>0&&(
               <button className="btn-poster" onClick={()=>setShowPoster(true)}>مشاركة جميع المناسبات</button>
             )}
           </div>
         </div>
       )}
 
-      {/* REGISTER */}
       {page==="register"&&(
         <div style={S.container}>
           <div style={S.formWrap}>
@@ -331,7 +355,6 @@ export default function App() {
         </div>
       )}
 
-      {/* NOTIFY */}
       {page==="notify"&&submittedEvent&&(
         <div style={S.container}>
           <div style={S.formWrap}>
@@ -349,7 +372,6 @@ export default function App() {
         </div>
       )}
 
-      {/* LOGIN */}
       {page==="login"&&(
         <div style={S.container}>
           <div style={S.formWrap}>
@@ -362,7 +384,6 @@ export default function App() {
         </div>
       )}
 
-      {/* ADMIN */}
       {page==="admin"&&isAdmin&&(
         <div style={S.container}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
@@ -375,7 +396,6 @@ export default function App() {
             <button style={{...S.tab,...(adminTab==="archived"?S.tabActive:{})}} onClick={()=>setAdminTab("archived")}>السابقة <span style={S.tabBadge}>{archivedEvents.length}</span></button>
             <button style={{...S.tab,...(adminTab==="accounts"?S.tabActive:{})}} onClick={()=>setAdminTab("accounts")}>الحسابات <span style={S.tabBadge}>{adminAccounts.length}</span></button>
           </div>
-
           {adminTab==="active"&&(<div>{adminActive.length===0?<p style={S.empty}>لا توجد طلبات حالية</p>:adminActive.map(renderAdminCard)}</div>)}
           {adminTab==="archived"&&(<div>{archivedEvents.length===0?<p style={S.empty}>لا توجد مناسبات سابقة</p>:archivedEvents.map(renderAdminCard)}</div>)}
           {adminTab==="accounts"&&(
@@ -389,13 +409,10 @@ export default function App() {
                     </div>
                   ):(
                     <div style={S.adminCardInner}>
-                      <div style={S.adminCardInfo}>
-                        <strong>{acc.label}</strong>
-                        <span style={{color:"#aaa",fontSize:13,letterSpacing:2}}>{"•".repeat(acc.password.length)}</span>
-                      </div>
+                      <div style={S.adminCardInfo}><strong>{acc.label}</strong><span style={{color:"#aaa",fontSize:12,letterSpacing:2}}>{"•".repeat(acc.password.length)}</span></div>
                       <div style={S.adminActions}>
-                        <button style={S.editBtn} onClick={()=>{setEditPassId(acc.id);setEditPassVal("");}}>🔑</button>
-                        {adminAccounts.length>1&&<button style={S.deleteBtn} onClick={()=>deleteAdmin(acc.id)}>🗑️</button>}
+                        <button style={S.adminEditBtn} onClick={()=>{setEditPassId(acc.id);setEditPassVal("");}} title="تغيير كلمة المرور"><EditIcon/></button>
+                        {adminAccounts.length>1&&<button style={S.adminDeleteBtn} onClick={()=>deleteAdmin(acc.id)} title="حذف"><TrashIcon/></button>}
                       </div>
                     </div>
                   )}
@@ -405,10 +422,7 @@ export default function App() {
                 <p style={{fontWeight:700,color:"#7a5a10",marginBottom:12,fontSize:14}}>+ إضافة مدير جديد</p>
                 <Field label="اسم المدير" placeholder="مثال: خالد" value={newAccLabel} onChange={setNewAccLabel}/>
                 <div style={{display:"flex",gap:8,alignItems:"flex-end",marginBottom:14}}>
-                  <div style={{flex:1}}>
-                    <label style={S.label}>كلمة المرور</label>
-                    <input style={S.input} value={generatedPass} readOnly placeholder="اضغط توليد"/>
-                  </div>
+                  <div style={{flex:1}}><label style={S.label}>كلمة المرور</label><input style={S.input} value={generatedPass} readOnly placeholder="اضغط توليد"/></div>
                   <button style={S.genBtn} onClick={()=>setGeneratedPass(generatePass())}>توليد</button>
                 </div>
                 {accError&&<p style={S.error}>{accError}</p>}
@@ -422,7 +436,77 @@ export default function App() {
       <footer style={S.footer}>{SITE_NAME} .. مساهمة مجتمعية</footer>
 
       {shareCardEvent&&<ShareCardModal ev={shareCardEvent} onClose={()=>setShareCardEvent(null)} onWa={shareEventWa}/>}
-      {showPoster&&<PosterModal events={activeApproved} onClose={()=>setShowPoster(false)}/>}
+      {showPoster&&<PosterModal events={allApproved} onClose={()=>setShowPoster(false)}/>}
+    </div>
+  );
+}
+
+// ── Poster Modal ──────────────────────────────────────────────────
+function PosterModal({events,onClose}:{events:Event[];onClose:()=>void}) {
+  const posterRef = useRef<HTMLDivElement>(null);
+  const [downloading, setDownloading] = useState(false);
+  const today = new Date().toLocaleDateString("ar-SA-u-ca-islamic",{year:"numeric",month:"long",day:"numeric"});
+  const count = events.length;
+  // Auto-scale font based on event count
+  const nameFontSize = count<=6?13:count<=10?11:count<=15?10:9;
+  const metaFontSize = nameFontSize-1;
+  const rowPadding = count<=6?7:count<=10?5:count<=15?4:3;
+
+  const downloadPoster = async () => {
+    if(!posterRef.current) return;
+    setDownloading(true);
+    try {
+      const h2c = await loadH2C();
+      const canvas = await h2c(posterRef.current,{scale:3,useCORS:true,backgroundColor:"#ffffff"});
+      const link = document.createElement("a");
+      link.download = "زواجات-الخيرة.png";
+      link.href = canvas.toDataURL("image/png");
+      link.click();
+    } catch { alert("حدث خطأ أثناء التحميل"); }
+    setDownloading(false);
+  };
+
+  return (
+    <div style={M.overlay} onClick={onClose}>
+      <div style={{maxWidth:340,width:"100%",position:"relative"}} onClick={e=>e.stopPropagation()}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8,padding:"0 2px"}}>
+          <p style={{color:"#fff",fontSize:11}}>صوّر الشاشة أو حمّل الصورة</p>
+          <div style={{display:"flex",gap:6}}>
+            <button style={{background:"#c9a227",border:"none",color:"#fff",borderRadius:7,padding:"5px 12px",cursor:"pointer",fontSize:12,fontWeight:700,fontFamily:"inherit",opacity:downloading?0.7:1}} onClick={downloadPoster} disabled={downloading}>
+              {downloading?"جاري...":"⬇️ تحميل"}
+            </button>
+            <button style={{background:"rgba(255,255,255,0.2)",border:"none",color:"#fff",borderRadius:"50%",width:26,height:26,cursor:"pointer",fontSize:13}} onClick={onClose}>✕</button>
+          </div>
+        </div>
+        {/* Poster — white background, 9:16 fixed ratio */}
+        <div ref={posterRef} style={{...P.poster,aspectRatio:"9/16",overflow:"hidden",display:"flex",flexDirection:"column",background:"#ffffff"}}>
+          <div style={P.topBorder}/>
+          <div style={P.header}>
+            <p style={P.ornament}>﷽</p>
+            <h1 style={P.title}>{SITE_NAME}</h1>
+            <p style={P.subtitle}>قبيلة الخيرة — مركز دوقة</p>
+            <span style={P.dateBadge}>{today}</span>
+          </div>
+          <div style={P.dividerRow}><span>— ❖ —</span></div>
+          <div style={{flex:1,padding:"0 10px",overflow:"hidden"}}>
+            {events.map((ev,i)=>(
+              <div key={ev.id} style={{display:"flex",alignItems:"flex-start",gap:7,padding:`${rowPadding}px 6px`,borderRadius:5,background:i%2===0?"transparent":"rgba(201,162,39,0.04)",borderBottom:"1px solid #f5ede0"}}>
+                <div style={{width:17,height:17,borderRadius:"50%",background:"#c9a227",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",fontSize:9,fontWeight:800,flexShrink:0,marginTop:2}}>{i+1}</div>
+                <div style={{flex:1}}>
+                  <span style={{display:"block",fontWeight:800,fontSize:nameFontSize,color:"#1a1208",marginBottom:1}}>{ev.name}</span>
+                  <span style={{display:"block",fontSize:metaFontSize,color:"#555"}}>{ev.day} · {ev.hijriDate} · {ev.venue}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+          <div style={P.dividerRow}><span>— ❖ —</span></div>
+          <div style={P.posterFooter}>
+            <p style={P.footerText}>نبارك للعرسان ونتمنى لهم حياة سعيدة مباركة</p>
+            <p style={P.footerSite}>{SITE_NAME} — مساهمة مجتمعية</p>
+          </div>
+          <div style={P.topBorder}/>
+        </div>
+      </div>
     </div>
   );
 }
@@ -436,85 +520,48 @@ function ShareCardModal({ev,onClose,onWa}:{ev:Event;onClose:()=>void;onWa:(e:Eve
         <p style={{color:"#999",fontSize:12,textAlign:"center",marginBottom:14}}>صوّر الشاشة أو شارك عبر واتساب</p>
         <div style={M.card}>
           <div style={M.cardTopBorder}/>
-          <div style={{textAlign:"center",padding:"18px 16px 6px"}}>
+          <div style={{textAlign:"center",padding:"16px 16px 4px"}}>
             <p style={M.cardOrnament}>❧</p>
             <p style={M.cardInvite}>يسعدنا دعوتكم لحفل زواج</p>
           </div>
           <div style={M.cardDivider}/>
           <h2 style={M.cardName}>{ev.name}</h2>
           <div style={M.cardDivider}/>
-          <div style={{padding:"4px 20px 16px"}}>
+          <div style={{padding:"4px 20px 14px"}}>
             <div style={M.cardDetail}><span>📅</span><span><strong>{ev.day}</strong> — {ev.hijriDate}</span></div>
             <div style={M.cardDetail}><span>📍</span><span>{ev.venue}</span></div>
-            {ev.notes&&<div style={M.cardDetail}><span>📝</span><span style={{color:"#aaa",fontSize:13}}>{ev.notes}</span></div>}
+            {ev.notes&&<div style={M.cardDetail}><span>📝</span><span style={{color:"#aaa",fontSize:12}}>{ev.notes}</span></div>}
           </div>
           <div style={M.cardBottom}><span style={M.cardBottomText}>{SITE_NAME}</span></div>
-          <div style={M.cardBottomBorder}/>
+          <div style={M.cardTopBorder}/>
         </div>
-        <button style={M.waBtn} onClick={()=>onWa(ev)}>
-          <WaIcon/>&nbsp; مشاركة عبر واتساب
-        </button>
+        <button style={M.waBtn} onClick={()=>onWa(ev)}><WaIcon/>&nbsp; مشاركة عبر واتساب</button>
       </div>
     </div>
   );
 }
 
-// ── Poster Modal ──────────────────────────────────────────────────
-function PosterModal({events,onClose}:{events:Event[];onClose:()=>void}) {
-  const today = new Date().toLocaleDateString("ar-SA-u-ca-islamic",{year:"numeric",month:"long",day:"numeric"});
-  return (
-    <div style={M.overlay} onClick={onClose}>
-      <div style={{...M.modal,maxWidth:380,padding:0,background:"transparent",boxShadow:"none",borderRadius:0}} onClick={e=>e.stopPropagation()}>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8,padding:"0 4px"}}>
-          <p style={{color:"#fff",fontSize:12}}>صوّر الشاشة لمشاركة البوستر</p>
-          <button style={{background:"rgba(255,255,255,0.2)",border:"none",color:"#fff",borderRadius:"50%",width:28,height:28,cursor:"pointer",fontSize:14}} onClick={onClose}>✕</button>
-        </div>
-        <div style={P.poster}>
-          <div style={P.topBorder}/>
-          <div style={P.header}>
-            <p style={P.ornament}>﷽</p>
-            <h1 style={P.title}>{SITE_NAME}</h1>
-            <p style={P.subtitle}>قبيلة الخيرة — مركز دوقة</p>
-            <span style={P.dateBadge}>{today}</span>
-          </div>
-          <div style={P.dividerRow}><span style={P.dividerDot}>— ❖ —</span></div>
-          <div style={P.list}>
-            {events.map((ev,i)=>(
-              <div key={ev.id} style={{...P.row,...(i%2===0?{}:{background:"rgba(201,162,39,0.05)"})}}>
-                <div style={P.rowNum}>{i+1}</div>
-                <div style={P.rowContent}>
-                  <span style={P.rowName}>{ev.name}</span>
-                  <span style={P.rowMeta}>{ev.day} {ev.hijriDate} · {ev.venue}</span>
-                </div>
-              </div>
-            ))}
-          </div>
-          <div style={P.dividerRow}><span style={P.dividerDot}>— ❖ —</span></div>
-          <div style={P.posterFooter}>
-            <p style={P.footerText}>نبارك للعرسان الكرام ونتمنى لهم حياة سعيدة مباركة</p>
-            <p style={P.footerSite}>{SITE_NAME} — مساهمة مجتمعية</p>
-          </div>
-          <div style={P.topBorder}/>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ── Components ────────────────────────────────────────────────────
+// ── Icons ─────────────────────────────────────────────────────────
 function ShareIcon() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-      <circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/>
-      <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
-    </svg>
-  );
+  return <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>;
 }
-
+function MapsIcon() {
+  return <svg width="15" height="15" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z" fill="#ea4335"/><circle cx="12" cy="9" r="2.5" fill="#fff"/></svg>;
+}
+function EditIcon() {
+  return <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>;
+}
+function TrashIcon() {
+  return <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>;
+}
+function FilterIcon({active}:{active:boolean}) {
+  return <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke={active?"#fff":"#888"} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><line x1="4" y1="6" x2="20" y2="6"/><line x1="8" y1="12" x2="16" y2="12"/><line x1="11" y1="18" x2="13" y2="18"/></svg>;
+}
 function WaIcon() {
   return <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" style={{flexShrink:0,display:"inline-block",verticalAlign:"middle"}}><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/></svg>;
 }
 
+// ── Components ─────────────────────────────────────────────────────
 function Field({label,placeholder,value,onChange,optional,type="text"}:{label:string;placeholder?:string;value:string;onChange:(v:string)=>void;optional?:boolean;type?:string}) {
   return (
     <div style={S.fieldGroup}>
@@ -523,24 +570,14 @@ function Field({label,placeholder,value,onChange,optional,type="text"}:{label:st
     </div>
   );
 }
-
 function HijriField({year,month,day,onChange}:{year:string;month:string;day:string;onChange:(y:string,m:string,d:string)=>void}) {
   return (
     <div style={S.fieldGroup}>
       <label style={S.label}>التاريخ الهجري *</label>
       <div style={{display:"flex",gap:8}}>
-        <select style={{...S.select,flex:2}} value={year} onChange={e=>onChange(e.target.value,month,day)}>
-          <option value="">السنة</option>
-          {HIJRI_YEARS.map(y=><option key={y} value={String(y)}>{y} هـ</option>)}
-        </select>
-        <select style={{...S.select,flex:3}} value={month} onChange={e=>onChange(year,e.target.value,day)}>
-          <option value="">الشهر</option>
-          {HIJRI_MONTHS.map((m,i)=><option key={i} value={String(i+1).padStart(2,"0")}>{m}</option>)}
-        </select>
-        <select style={{...S.select,flex:2}} value={day} onChange={e=>onChange(year,month,e.target.value)}>
-          <option value="">اليوم</option>
-          {Array.from({length:30},(_,i)=><option key={i+1} value={String(i+1).padStart(2,"0")}>{i+1}</option>)}
-        </select>
+        <select style={{...S.select,flex:2}} value={year} onChange={e=>onChange(e.target.value,month,day)}><option value="">السنة</option>{HIJRI_YEARS.map(y=><option key={y} value={String(y)}>{y} هـ</option>)}</select>
+        <select style={{...S.select,flex:3}} value={month} onChange={e=>onChange(year,e.target.value,day)}><option value="">الشهر</option>{HIJRI_MONTHS.map((m,i)=><option key={i} value={String(i+1).padStart(2,"0")}>{m}</option>)}</select>
+        <select style={{...S.select,flex:2}} value={day} onChange={e=>onChange(year,month,e.target.value)}><option value="">اليوم</option>{Array.from({length:30},(_,i)=><option key={i+1} value={String(i+1).padStart(2,"0")}>{i+1}</option>)}</select>
       </div>
     </div>
   );
@@ -550,7 +587,7 @@ function HijriField({year,month,day,onChange}:{year:string;month:string;day:stri
 const S: Record<string,React.CSSProperties> = {
   root:{fontFamily:"'Tajawal',sans-serif",direction:"rtl",minHeight:"100vh",background:"#faf8f3",color:"#1a1208"},
   nav:{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"12px 20px",background:"#fff",borderBottom:"2px solid #e8d9b5",position:"sticky",top:0,zIndex:200,boxShadow:"0 2px 8px rgba(0,0,0,0.05)"},
-  navTitle:{fontSize:17,fontWeight:900,color:"#7a5a10",letterSpacing:"0.02em"},
+  navTitle:{fontSize:17,fontWeight:900,color:"#7a5a10"},
   hamburger:{background:"none",border:"none",cursor:"pointer",display:"flex",flexDirection:"column",gap:5,padding:6,width:40,alignItems:"flex-end"},
   overlayBg:{position:"fixed",inset:0,background:"rgba(0,0,0,0.38)",zIndex:300},
   sidebar:{position:"fixed",top:0,right:0,height:"100%",width:240,background:"#fff",zIndex:400,boxShadow:"-4px 0 20px rgba(0,0,0,0.1)",display:"flex",flexDirection:"column",padding:20,transition:"transform 0.28s ease",gap:2},
@@ -558,51 +595,55 @@ const S: Record<string,React.CSSProperties> = {
   closeBtn:{background:"none",border:"none",cursor:"pointer",fontSize:18,color:"#aaa"},
   sideLink:{background:"none",border:"none",cursor:"pointer",color:"#1a1208",fontSize:15,fontWeight:600,padding:"12px 8px",textAlign:"right",borderRadius:8,fontFamily:"inherit",width:"100%"},
   container:{maxWidth:680,margin:"0 auto",padding:"0 16px 40px"},
-  hero:{padding:"14px 4px 16px",borderBottom:"1px solid #f0e8d8",marginBottom:16},
-  heroSub:{fontSize:13,color:"#aaa",marginBottom:14,lineHeight:1.7},
+  hero:{padding:"14px 4px 14px",borderBottom:"1px solid #f0e8d8",marginBottom:14},
+  heroSub:{fontSize:13,color:"#aaa",marginBottom:12,lineHeight:1.7},
   section:{},
-  sectionTitleRow:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14},
-  sectionTitle:{fontSize:16,fontWeight:800,color:"#1a1208",margin:0},
-  viewToggle:{display:"flex",gap:4},
-  viewBtn:{background:"#f5f0e8",border:"1px solid #e8d9b5",borderRadius:7,width:30,height:30,cursor:"pointer",fontSize:15,color:"#aaa",display:"flex",alignItems:"center",justifyContent:"center"},
+  sectionTitleRow:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12},
+  sectionTitle:{fontSize:15,fontWeight:800,color:"#1a1208",margin:0,display:"flex",alignItems:"center",gap:6},
+  countBadge:{background:"#f5f0e8",color:"#8b6914",fontSize:10,fontWeight:700,padding:"2px 7px",borderRadius:20,border:"1px solid #e8d9b5"},
+  viewBtn:{background:"#f5f0e8",border:"1px solid #e8d9b5",borderRadius:7,width:30,height:30,cursor:"pointer",fontSize:14,color:"#aaa",display:"flex",alignItems:"center",justifyContent:"center"},
   viewBtnActive:{background:"#7a5a10",color:"#fff",borderColor:"#7a5a10"},
-  grid:{display:"flex",flexDirection:"column",gap:9},
-  card:{background:"#fff",borderRadius:12,padding:"14px 16px",border:"1px solid #e8d9b5",boxShadow:"0 1px 4px rgba(0,0,0,0.04)"},
-  cardHeader:{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:9},
-  cardName:{fontSize:16,fontWeight:800,color:"#6b4d0e",margin:0,flex:1,lineHeight:1.4},
-  shareIconBtn:{display:"flex",alignItems:"center",justifyContent:"center",width:30,height:30,borderRadius:8,background:"transparent",border:"1.5px solid #e0cfa0",cursor:"pointer",color:"#c9a227",flexShrink:0},
-  shareBtn:{background:"transparent",border:"1.5px solid #e0cfa0",color:"#8b6914",borderRadius:8,padding:"6px 14px",cursor:"pointer",fontFamily:"inherit",fontWeight:600,fontSize:12,marginTop:10},
-  cardRow:{display:"flex",alignItems:"center",gap:8,fontSize:13,color:"#555",marginBottom:5},
-  cardIcon:{fontSize:13,flexShrink:0},
-  mapLink:{color:"#8b6914",fontSize:12,textDecoration:"underline",marginRight:"auto"},
-  notesText:{margin:"5px 0 0",fontSize:12,color:"#bbb",lineHeight:1.5},
-  compactCard:{background:"#fff",borderRadius:9,padding:"10px 14px",border:"1px solid #e8d9b5",cursor:"pointer"},
+  filterPanel:{position:"absolute",top:36,left:0,background:"#fff",border:"1px solid #e8d9b5",borderRadius:12,padding:14,width:210,boxShadow:"0 4px 20px rgba(0,0,0,0.1)",zIndex:10},
+  filterTitle:{fontWeight:700,color:"#7a5a10",fontSize:13,marginBottom:10},
+  grid:{display:"flex",flexDirection:"column",gap:8},
+  // Full view card — smaller font & padding
+  card:{background:"#fff",borderRadius:11,padding:"11px 13px",border:"1px solid #e8d9b5",boxShadow:"0 1px 4px rgba(0,0,0,0.04)"},
+  cardHeader:{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:10,marginBottom:7},
+  cardName:{fontSize:14,fontWeight:800,color:"#6b4d0e",margin:0,flex:1,lineHeight:1.5,textAlign:"right"},
+  shareIconBtn:{display:"flex",alignItems:"center",justifyContent:"center",width:26,height:26,borderRadius:6,background:"transparent",border:"1.5px solid #e0cfa0",cursor:"pointer",color:"#c9a227",flexShrink:0},
+  shareBtn:{background:"transparent",border:"1.5px solid #e0cfa0",color:"#8b6914",borderRadius:7,padding:"5px 12px",cursor:"pointer",fontFamily:"inherit",fontWeight:600,fontSize:11,marginTop:7},
+  cardRow:{display:"flex",alignItems:"center",gap:7,fontSize:12,color:"#555",marginBottom:4},
+  cardIcon:{fontSize:11,flexShrink:0},
+  mapIconLink:{display:"flex",alignItems:"center",marginRight:"auto",marginLeft:2},
+  notesText:{margin:"3px 0 0",fontSize:11,color:"#bbb",lineHeight:1.5},
+  // Compact view — smaller name, darker date
+  compactCard:{background:"#fff",borderRadius:9,padding:"8px 12px",border:"1px solid #e8d9b5",cursor:"pointer"},
   compactRow:{display:"flex",alignItems:"center",gap:8},
-  compactName:{flex:1,fontWeight:700,fontSize:14,color:"#6b4d0e"},
-  compactDate:{color:"#aaa",fontSize:12,flexShrink:0},
+  compactName:{flex:1,fontWeight:700,fontSize:13,color:"#6b4d0e"},
+  compactDate:{color:"#444",fontSize:11,fontWeight:600,flexShrink:0},
   chevron:{color:"#c9a227",fontSize:9,transition:"transform 0.2s",flexShrink:0},
-  compactDetails:{marginTop:9,paddingTop:9,borderTop:"1px solid #f5ede0"},
+  compactDetails:{marginTop:8,paddingTop:8,borderTop:"1px solid #f5ede0"},
   empty:{textAlign:"center",color:"#ccc",padding:28,fontSize:13},
   formWrap:{background:"#fff",borderRadius:16,padding:"22px 18px",border:"1px solid #e8d9b5",boxShadow:"0 2px 10px rgba(0,0,0,0.04)",marginTop:20},
   formTitle:{fontSize:19,fontWeight:800,color:"#6b4d0e",marginBottom:16,textAlign:"center"},
   fieldGroup:{marginBottom:14},
   label:{display:"block",fontWeight:700,color:"#1a1208",marginBottom:6,fontSize:13},
-  input:{width:"100%",padding:"10px 12px",border:"1.5px solid #e0cfa0",borderRadius:8,fontSize:13,background:"#fffdf7",color:"#1a1208",outline:"none",boxSizing:"border-box",fontFamily:"inherit"},
-  select:{width:"100%",padding:"10px 12px",border:"1.5px solid #e0cfa0",borderRadius:8,fontSize:13,background:"#fffdf7",color:"#1a1208",outline:"none",boxSizing:"border-box",fontFamily:"inherit"},
-  textarea:{width:"100%",padding:"10px 12px",border:"1.5px solid #e0cfa0",borderRadius:8,fontSize:13,background:"#fffdf7",color:"#1a1208",outline:"none",boxSizing:"border-box",fontFamily:"inherit",resize:"vertical"},
+  input:{width:"100%",padding:"9px 12px",border:"1.5px solid #e0cfa0",borderRadius:8,fontSize:13,background:"#fffdf7",color:"#1a1208",outline:"none",boxSizing:"border-box",fontFamily:"inherit"},
+  select:{width:"100%",padding:"9px 12px",border:"1.5px solid #e0cfa0",borderRadius:8,fontSize:13,background:"#fffdf7",color:"#1a1208",outline:"none",boxSizing:"border-box",fontFamily:"inherit"},
+  textarea:{width:"100%",padding:"9px 12px",border:"1.5px solid #e0cfa0",borderRadius:8,fontSize:13,background:"#fffdf7",color:"#1a1208",outline:"none",boxSizing:"border-box",fontFamily:"inherit",resize:"vertical"},
   error:{color:"#c0392b",fontSize:12,textAlign:"center",marginBottom:8},
   waNotifyBtn:{display:"flex",alignItems:"center",justifyContent:"center",gap:8,background:"#25d366",color:"#fff",border:"none",borderRadius:10,padding:"12px",cursor:"pointer",fontFamily:"inherit",fontWeight:700,fontSize:14,width:"100%"},
   back:{background:"none",border:"none",cursor:"pointer",color:"#8b6914",fontSize:13,fontWeight:600,padding:0,marginBottom:10,fontFamily:"inherit",display:"block"},
-  adminCard:{background:"#fff",borderRadius:10,padding:"12px 14px",border:"1px solid #e8d9b5",marginBottom:8},
-  adminCardInner:{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:10},
+  adminCard:{background:"#fff",borderRadius:10,padding:"11px 13px",border:"1px solid #e8d9b5",marginBottom:8},
+  adminCardInner:{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8},
   adminCardInfo:{display:"flex",flexDirection:"column",gap:3,flex:1},
-  adminActions:{display:"flex",flexDirection:"column",gap:5,flexShrink:0},
-  statusBadge:{display:"inline-block",padding:"2px 8px",borderRadius:20,fontSize:11,fontWeight:700,width:"fit-content"},
-  editBtn:{background:"#f5f5f5",border:"none",borderRadius:6,width:30,height:30,cursor:"pointer",fontSize:13},
-  toggleBtn:{border:"none",borderRadius:6,width:30,height:30,cursor:"pointer",fontSize:13},
-  deleteBtn:{background:"#ffeaea",border:"none",borderRadius:6,width:30,height:30,cursor:"pointer",fontSize:13},
+  adminActions:{display:"flex",flexDirection:"column",gap:4,flexShrink:0},
+  statusBadge:{display:"inline-block",padding:"2px 8px",borderRadius:20,fontSize:10,fontWeight:700,width:"fit-content"},
+  adminEditBtn:{display:"flex",alignItems:"center",justifyContent:"center",width:26,height:26,background:"#fdf8ee",border:"1px solid #e8d9b5",borderRadius:6,cursor:"pointer",color:"#8b6914"},
+  adminToggleBtn:{display:"flex",alignItems:"center",justifyContent:"center",width:26,height:26,border:"1px solid",borderRadius:6,cursor:"pointer",fontSize:13,fontWeight:700},
+  adminDeleteBtn:{display:"flex",alignItems:"center",justifyContent:"center",width:26,height:26,background:"#fff5f5",border:"1px solid #fdd",borderRadius:6,cursor:"pointer",color:"#c0392b"},
   cancelBtn:{background:"#f0f0f0",border:"none",borderRadius:8,padding:"8px 12px",cursor:"pointer",fontSize:13,fontFamily:"inherit",fontWeight:600},
-  genBtn:{background:"#7a5a10",color:"#fff",border:"none",borderRadius:8,padding:"10px 12px",cursor:"pointer",fontFamily:"inherit",fontWeight:700,fontSize:13,whiteSpace:"nowrap" as const},
+  genBtn:{background:"#7a5a10",color:"#fff",border:"none",borderRadius:8,padding:"9px 12px",cursor:"pointer",fontFamily:"inherit",fontWeight:700,fontSize:13,whiteSpace:"nowrap" as const},
   tabs:{display:"flex",gap:5,marginBottom:12},
   tab:{flex:1,padding:"8px 4px",border:"1.5px solid #e8d9b5",borderRadius:8,background:"#fff",cursor:"pointer",fontSize:12,fontWeight:600,fontFamily:"inherit",color:"#aaa",display:"flex",alignItems:"center",justifyContent:"center",gap:4},
   tabActive:{background:"#7a5a10",color:"#fff",borderColor:"#7a5a10"},
@@ -611,51 +652,42 @@ const S: Record<string,React.CSSProperties> = {
 };
 
 const M: Record<string,React.CSSProperties> = {
-  overlay:{position:"fixed",inset:0,background:"rgba(0,0,0,0.65)",zIndex:500,display:"flex",alignItems:"center",justifyContent:"center",padding:20},
-  modal:{background:"#fff",borderRadius:18,padding:18,width:"100%",maxWidth:340,position:"relative",maxHeight:"90vh",overflowY:"auto"},
+  overlay:{position:"fixed",inset:0,background:"rgba(0,0,0,0.65)",zIndex:500,display:"flex",alignItems:"center",justifyContent:"center",padding:16},
+  modal:{background:"#fff",borderRadius:18,padding:16,width:"100%",maxWidth:320,position:"relative",maxHeight:"90vh",overflowY:"auto"},
   closeBtn:{position:"absolute",top:10,left:10,background:"none",border:"none",fontSize:17,cursor:"pointer",color:"#aaa"},
-  card:{background:"linear-gradient(160deg,#fffdf5,#fff8e8)",border:"2px solid #c9a227",borderRadius:14,overflow:"hidden"},
-  cardTopBorder:{height:6,background:"linear-gradient(to right,#c9a227,#f0d060,#c9a227)"},
-  cardOrnament:{fontSize:24,color:"#c9a227",margin:"0 0 4px",textAlign:"center"},
-  cardInvite:{fontSize:12,color:"#aaa",margin:0,textAlign:"center",letterSpacing:"0.04em"},
-  cardDivider:{height:1,background:"linear-gradient(to right,transparent,#c9a227,transparent)",margin:"12px 20px"},
-  cardName:{fontSize:20,fontWeight:900,color:"#6b4d0e",textAlign:"center",margin:"0 20px 8px",lineHeight:1.3},
-  cardDetail:{display:"flex",alignItems:"flex-start",gap:8,fontSize:13,color:"#444",marginBottom:7,justifyContent:"center"},
-  cardBottom:{textAlign:"center",padding:"8px",borderTop:"1px solid #e8d9b5"},
-  cardBottomText:{fontSize:11,color:"#c9a227",fontWeight:700,letterSpacing:"0.08em"},
-  cardBottomBorder:{height:6,background:"linear-gradient(to right,#c9a227,#f0d060,#c9a227)"},
+  card:{background:"#fff",border:"2px solid #c9a227",borderRadius:12,overflow:"hidden"},
+  cardTopBorder:{height:5,background:"linear-gradient(to right,#c9a227,#f0d060,#c9a227)"},
+  cardOrnament:{fontSize:22,color:"#c9a227",margin:"0 0 3px",textAlign:"center"},
+  cardInvite:{fontSize:11,color:"#aaa",margin:0,textAlign:"center"},
+  cardDivider:{height:1,background:"linear-gradient(to right,transparent,#c9a227,transparent)",margin:"10px 18px"},
+  cardName:{fontSize:19,fontWeight:900,color:"#6b4d0e",textAlign:"center",margin:"0 16px 6px",lineHeight:1.4},
+  cardDetail:{display:"flex",alignItems:"flex-start",gap:8,fontSize:13,color:"#333",marginBottom:6,justifyContent:"center"},
+  cardBottom:{textAlign:"center",padding:"7px",borderTop:"1px solid #e8d9b5"},
+  cardBottomText:{fontSize:11,color:"#c9a227",fontWeight:700,letterSpacing:"0.06em"},
   waBtn:{display:"flex",alignItems:"center",justifyContent:"center",gap:8,background:"#25d366",color:"#fff",border:"none",borderRadius:10,padding:"11px",cursor:"pointer",fontFamily:"inherit",fontWeight:700,fontSize:14,width:"100%",marginTop:12},
 };
 
+// Poster — white clean background
 const P: Record<string,React.CSSProperties> = {
-  poster:{background:"linear-gradient(175deg,#fffdf5,#fff8e8,#fffdf5)",width:"100%",borderRadius:14,overflow:"hidden",boxShadow:"0 8px 40px rgba(0,0,0,0.3)"},
-  topBorder:{height:7,background:"linear-gradient(to right,#c9a227,#f0d060,#c9a227)"},
-  header:{textAlign:"center",padding:"16px 16px 10px"},
-  ornament:{fontSize:16,color:"#c9a227",margin:"0 0 6px"},
-  title:{fontSize:22,fontWeight:900,color:"#6b4d0e",margin:"0 0 4px"},
-  subtitle:{fontSize:12,color:"#aaa",margin:"0 0 8px"},
-  dateBadge:{display:"inline-block",background:"rgba(201,162,39,0.1)",color:"#8b6914",fontSize:11,fontWeight:700,padding:"3px 12px",borderRadius:20,border:"1px solid #e8d9b5"},
-  dividerRow:{textAlign:"center",margin:"8px 0",color:"#c9a227",fontSize:12,letterSpacing:4},
-  dividerDot:{},
-  list:{padding:"0 12px"},
-  row:{display:"flex",alignItems:"flex-start",gap:8,padding:"8px 6px",borderRadius:6},
-  rowNum:{width:20,height:20,borderRadius:"50%",background:"#c9a227",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,fontWeight:800,flexShrink:0,marginTop:2},
-  rowContent:{flex:1},
-  rowName:{display:"block",fontWeight:800,fontSize:14,color:"#1a1208",marginBottom:1},
-  rowMeta:{display:"block",fontSize:11,color:"#999"},
-  posterFooter:{textAlign:"center",padding:"10px 16px 14px"},
-  footerText:{fontSize:12,color:"#aaa",margin:"0 0 4px",lineHeight:1.6},
-  footerSite:{fontSize:11,color:"#c9a227",fontWeight:700,margin:0},
+  poster:{width:"100%",borderRadius:12,boxShadow:"0 8px 40px rgba(0,0,0,0.3)"},
+  topBorder:{height:6,background:"linear-gradient(to right,#c9a227,#f0d060,#c9a227)"},
+  header:{textAlign:"center",padding:"14px 14px 8px",background:"#fff"},
+  ornament:{fontSize:14,color:"#c9a227",margin:"0 0 4px"},
+  title:{fontSize:20,fontWeight:900,color:"#6b4d0e",margin:"0 0 3px"},
+  subtitle:{fontSize:11,color:"#999",margin:"0 0 7px"},
+  dateBadge:{display:"inline-block",background:"rgba(201,162,39,0.08)",color:"#8b6914",fontSize:10,fontWeight:700,padding:"3px 10px",borderRadius:20,border:"1px solid #e8d9b5"},
+  dividerRow:{textAlign:"center",color:"#c9a227",fontSize:11,letterSpacing:3,margin:"5px 0",background:"#fff"},
+  posterFooter:{textAlign:"center",padding:"8px 14px 10px",background:"#fff"},
+  footerText:{fontSize:11,color:"#666",margin:"0 0 3px",lineHeight:1.5},
+  footerSite:{fontSize:10,color:"#c9a227",fontWeight:700,margin:0},
 };
 
 const css = `
   @import url('https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800;900&display=swap');
   * { box-sizing: border-box; margin: 0; }
-  .btn-gold { background: linear-gradient(135deg,#c9a227,#7a5a10); color:#fff; border:none; border-radius:9px; padding:11px 22px; font-size:14px; font-weight:700; cursor:pointer; font-family:inherit; transition:opacity 0.2s; }
-  .btn-gold:hover { opacity:0.87; }
-  .btn-gold-sm { background: linear-gradient(135deg,#c9a227,#7a5a10); color:#fff; border:none; border-radius:9px; padding:9px 20px; font-size:13px; font-weight:700; cursor:pointer; font-family:inherit; transition:opacity 0.2s; }
-  .btn-gold-sm:hover { opacity:0.87; }
-  .btn-poster { display:block; width:100%; margin-top:16px; padding:10px; background:transparent; color:#8b6914; border:1.5px solid #e0cfa0; border-radius:9px; font-family:inherit; font-weight:700; font-size:13px; cursor:pointer; letter-spacing:0.02em; transition:background 0.2s; }
+  .btn-gold { background: linear-gradient(135deg,#c9a227,#7a5a10); color:#fff; border:none; border-radius:9px; padding:10px 20px; font-size:13px; font-weight:700; cursor:pointer; font-family:inherit; }
+  .btn-gold-sm { background: linear-gradient(135deg,#c9a227,#7a5a10); color:#fff; border:none; border-radius:8px; padding:8px 18px; font-size:13px; font-weight:700; cursor:pointer; font-family:inherit; }
+  .btn-poster { display:block; width:100%; margin-top:14px; padding:10px; background:transparent; color:#8b6914; border:1.5px solid #e0cfa0; border-radius:9px; font-family:inherit; font-weight:700; font-size:13px; cursor:pointer; }
   .btn-poster:hover { background:#fdf8ee; }
   .card:hover { box-shadow:0 3px 12px rgba(0,0,0,0.07) !important; }
   input:focus,select:focus,textarea:focus { border-color:#c9a227 !important; box-shadow:0 0 0 3px rgba(201,162,39,0.1); }
