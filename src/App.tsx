@@ -64,19 +64,6 @@ const generateId = ():string => Date.now().toString(36)+Math.random().toString(3
 const generatePass = ():string => Math.random().toString(36).slice(2,8).toUpperCase();
 const getMonthName = (hijriDate:string):string => { const {m}=parseHijriParts(hijriDate); return m>0?HIJRI_MONTHS[m-1]:""; };
 
-// ── Poster font calculator ─────────────────────────────────────────
-// Snapchat story = 9:16 ratio, ~600px tall content area after header/footer
-// Each row height ≈ nameFontSize * 2.2 (name line + meta line + padding)
-const calcPosterFont = (count:number):{nameFz:number;metaFz:number;rowH:number} => {
-  const CONTENT_H = 580; // available px for list
-  // find largest font where all rows fit
-  for(const nameFz of [14,13,12,11,10,9,8]) {
-    const rowH = nameFz * 2.4 + 8;
-    if(rowH * count <= CONTENT_H) return {nameFz, metaFz:nameFz-1, rowH};
-  }
-  return {nameFz:7, metaFz:6, rowH:7*2.4+6};
-};
-
 export default function App() {
   const [page, setPage] = useState("home");
   const [events, setEvents] = useState<Event[]>([]);
@@ -84,7 +71,7 @@ export default function App() {
   const [formError, setFormError] = useState("");
   const [submittedEvent, setSubmittedEvent] = useState<Event|null>(null);
   const [loading, setLoading] = useState(true);
-  const [viewMode, setViewMode] = useState<"full"|"compact">(() => (localStorage.getItem("manasbat_view")||"full") as "full"|"compact");
+  const [viewMode, setViewMode] = useState<"full"|"list">(() => (localStorage.getItem("manasbat_view")||"full") as "full"|"list");
   const [expandedId, setExpandedId] = useState<string|null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [shareCardEvent, setShareCardEvent] = useState<Event|null>(null);
@@ -121,7 +108,7 @@ export default function App() {
     document.addEventListener("mousedown",h); return ()=>document.removeEventListener("mousedown",h);
   },[sidebarOpen]);
 
-  const setView = (v:"full"|"compact") => { setViewMode(v); localStorage.setItem("manasbat_view",v); setShowViewMenu(false); };
+  const setView = (v:"full"|"list") => { setViewMode(v); localStorage.setItem("manasbat_view",v); setShowViewMenu(false); };
   const nav = (p:string) => { setPage(p); setSidebarOpen(false); setShowFilter(false); setShowViewMenu(false); };
   const closeDropdowns = () => { setShowFilter(false); setShowViewMenu(false); };
 
@@ -184,7 +171,7 @@ export default function App() {
       ? <a href={ev.mapLink} target="_blank" rel="noreferrer" style={S.venueLink} onClick={e=>e.stopPropagation()}>{ev.venue}</a>
       : <span>{ev.venue}</span>;
 
-    if(viewMode==="compact") return (
+    if(viewMode==="list") return (
       <div key={ev.id} style={S.compactCard} onClick={()=>{ closeDropdowns(); setExpandedId(isExp?null:ev.id); }}>
         <div style={S.compactRow}>
           <span style={S.compactName}>{ev.name}</span>
@@ -287,7 +274,6 @@ export default function App() {
                 {allApproved.length>0&&<span style={S.countBadge}>{allApproved.length}</span>}
               </h2>
               <div style={{display:"flex",gap:6,alignItems:"center"}}>
-                {/* Search */}
                 <div style={{position:"relative"}}>
                   <button style={{...S.toolBtn,...(hasFilter?S.toolBtnActive:{})}} onClick={e=>{e.stopPropagation();setShowViewMenu(false);setShowFilter(v=>!v);}}>
                     <SearchIcon active={hasFilter}/>
@@ -308,10 +294,9 @@ export default function App() {
                     </div>
                   )}
                 </div>
-                {/* View */}
                 <div style={{position:"relative"}}>
                   <button style={S.toolBtn} onClick={e=>{e.stopPropagation();setShowFilter(false);setShowViewMenu(v=>!v);}}>
-                    {viewMode==="compact"
+                    {viewMode==="list"
                       ?<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#888" strokeWidth="2.2" strokeLinecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
                       :<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#888" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="8" height="8" rx="1"/><rect x="13" y="3" width="8" height="8" rx="1"/><rect x="3" y="13" width="8" height="8" rx="1"/><rect x="13" y="13" width="8" height="8" rx="1"/></svg>
                     }
@@ -322,9 +307,9 @@ export default function App() {
                         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><rect x="3" y="3" width="18" height="5" rx="1"/><rect x="3" y="10" width="18" height="5" rx="1"/><rect x="3" y="17" width="18" height="5" rx="1"/></svg>
                         عرض كامل
                       </button>
-                      <button style={{...S.viewOpt,...(viewMode==="compact"?S.viewOptActive:{})}} onClick={()=>setView("compact")}>
+                      <button style={{...S.viewOpt,...(viewMode==="list"?S.viewOptActive:{})}} onClick={()=>setView("list")}>
                         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
-                        عرض مضغوط
+                        عرض قائمة
                       </button>
                     </div>
                   )}
@@ -368,18 +353,14 @@ export default function App() {
         </div>
       )}
 
-      {/* NOTIFY — updated message */}
       {page==="notify"&&submittedEvent&&(
         <div style={S.container}>
           <div style={S.formWrap}>
             <div style={{textAlign:"center",padding:"20px 0"}}>
               <div style={{fontSize:42,marginBottom:14}}>✅</div>
               <h3 style={{color:"#1a1208",margin:"0 0 10px",fontSize:18,fontWeight:800}}>تم حفظ بياناتك بنجاح</h3>
-              <p style={{color:"#666",fontSize:14,margin:"0 0 6px",lineHeight:1.7}}>
-                يرجى إرسال إشعار للإدارة
-              </p>
-              <p style={{color:"#666",fontSize:14,margin:"0 0 24px",lineHeight:1.7}}>
-                حتى يتم اعتماد طلبك
+              <p style={{color:"#666",fontSize:14,margin:"0 0 24px",lineHeight:1.8}}>
+                يرجى إرسال إشعار للإدارة<br/>حتى يتم اعتماد طلبك
               </p>
               <button style={S.waNotifyBtn} onClick={()=>notifyAdmin(submittedEvent)}>
                 <WaIcon/>&nbsp; إرسال إشعار للإدارة عبر واتساب
@@ -461,61 +442,60 @@ export default function App() {
   );
 }
 
-// ── Poster — fixed 9:16, auto font ───────────────────────────────
+// ── Poster — responsive, scrollable ──────────────────────────────
 function PosterModal({events,onClose}:{events:Event[];onClose:()=>void}) {
   const count = events.length;
-  const {nameFz, metaFz, rowH} = calcPosterFont(count);
-
-  // Snapchat story ratio: width 360px → height 640px (9:16)
-  const W = 340;
-  const H = Math.round(W * 16 / 9); // = 604px
+  const nameFz = count<=5?14:count<=8?13:count<=12?11:count<=16?10:9;
+  const metaFz = nameFz-1;
+  const rowPad = count<=6?8:count<=10?6:count<=15?4:3;
 
   return (
     <div style={PM.overlay} onClick={onClose}>
-      <div onClick={e=>e.stopPropagation()}>
-        <p style={{color:"#fff",fontSize:11,textAlign:"center",marginBottom:8}}>صوّر الشاشة لمشاركة البوستر</p>
-        <div style={{...PM.poster, width:W, height:H}}>
-          {/* Top stripe */}
-          <div style={PM.stripe}/>
-          {/* Header */}
-          <div style={PM.header}>
-            <p style={PM.basmala}>﷽</p>
-            <h1 style={PM.title}>{SITE_NAME}</h1>
-            <p style={PM.sub}>قبيلة الخيرة — مركز دوقة</p>
-          </div>
-          <div style={PM.divider}>— ❖ —</div>
-          {/* Events list — fills remaining space */}
-          <div style={{flex:1,overflow:"hidden",padding:"0 10px"}}>
-            {events.map((ev,i)=>(
-              <div key={ev.id} style={{
-                display:"flex", alignItems:"flex-start", gap:6,
-                height:rowH, overflow:"hidden",
-                background:i%2===0?"#ffffff":"#fdfaf3",
-                borderBottom:"1px solid #f0e8d0",
-                padding:"0 4px",
-              }}>
-                <div style={{
-                  width:16, height:16, borderRadius:"50%",
-                  background:"#c9a227", color:"#fff",
-                  display:"flex", alignItems:"center", justifyContent:"center",
-                  fontSize:8, fontWeight:800, flexShrink:0, marginTop:3,
-                }}>{i+1}</div>
-                <div style={{flex:1,overflow:"hidden"}}>
-                  <div style={{fontSize:nameFz,fontWeight:800,color:"#1a1208",lineHeight:1.3,overflow:"hidden",whiteSpace:"nowrap" as const,textOverflow:"ellipsis"}}>{ev.name}</div>
-                  <div style={{fontSize:metaFz,color:"#555",lineHeight:1.3,overflow:"hidden",whiteSpace:"nowrap" as const,textOverflow:"ellipsis"}}>{ev.hijriDate} · {ev.venue}</div>
-                </div>
-              </div>
-            ))}
-          </div>
-          <div style={PM.divider}>— ❖ —</div>
-          {/* Footer */}
-          <div style={PM.foot}>
-            <p style={PM.footText}>نبارك للعرسان ونتمنى لهم حياة سعيدة مباركة</p>
-            <p style={PM.footSite}>{SITE_NAME} — مساهمة مجتمعية</p>
-          </div>
-          <div style={PM.stripe}/>
+      <div style={PM.wrap} onClick={e=>e.stopPropagation()}>
+        {/* Close + label — always visible above poster */}
+        <div style={PM.topBar}>
+          <span style={{color:"#fff",fontSize:11}}>صوّر الشاشة لمشاركة البوستر</span>
+          <button style={PM.closeBtn} onClick={onClose}>✕</button>
         </div>
-        <button style={{background:"rgba(255,255,255,0.15)",border:"none",color:"#fff",borderRadius:8,padding:"8px 20px",cursor:"pointer",fontSize:12,fontFamily:"inherit",marginTop:10,width:W}} onClick={onClose}>إغلاق</button>
+        {/* Poster scrollable content */}
+        <div style={PM.scrollArea}>
+          <div style={PM.poster}>
+            <div style={PM.stripe}/>
+            <div style={PM.header}>
+              <p style={PM.basmala}>﷽</p>
+              <h1 style={PM.title}>{SITE_NAME}</h1>
+              <p style={PM.sub}>قبيلة الخيرة — مركز دوقة</p>
+            </div>
+            <div style={PM.divider}>— ❖ —</div>
+            <div>
+              {events.map((ev,i)=>(
+                <div key={ev.id} style={{
+                  display:"flex", alignItems:"flex-start", gap:8,
+                  padding:`${rowPad}px 12px`,
+                  background:i%2===0?"#ffffff":"#fdfaf3",
+                  borderBottom:"1px solid #f0e8d0",
+                }}>
+                  <div style={{
+                    width:18,height:18,borderRadius:"50%",
+                    background:"#c9a227",color:"#fff",
+                    display:"flex",alignItems:"center",justifyContent:"center",
+                    fontSize:9,fontWeight:800,flexShrink:0,marginTop:2,
+                  }}>{i+1}</div>
+                  <div style={{flex:1}}>
+                    <div style={{fontSize:nameFz,fontWeight:800,color:"#1a1208",lineHeight:1.3}}>{ev.name}</div>
+                    <div style={{fontSize:metaFz,color:"#555",lineHeight:1.3}}>{ev.hijriDate} · {ev.venue}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div style={PM.divider}>— ❖ —</div>
+            <div style={PM.foot}>
+              <p style={PM.footText}>نبارك للعرسان ونتمنى لهم حياة سعيدة مباركة</p>
+              <p style={PM.footSite}>{SITE_NAME} — مساهمة مجتمعية</p>
+            </div>
+            <div style={PM.stripe}/>
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -560,7 +540,6 @@ function EditIcon() { return <svg width="12" height="12" viewBox="0 0 24 24" fil
 function TrashIcon() { return <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>; }
 function WaIcon() { return <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" style={{flexShrink:0,display:"inline-block",verticalAlign:"middle"}}><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/></svg>; }
 
-// ── Components ────────────────────────────────────────────────────
 function Field({label,placeholder,value,onChange,optional,type="text"}:{label:string;placeholder?:string;value:string;onChange:(v:string)=>void;optional?:boolean;type?:string}) {
   return (
     <div style={S.fieldGroup}>
@@ -582,7 +561,6 @@ function HijriField({year,month,day,onChange}:{year:string;month:string;day:stri
   );
 }
 
-// ── Styles ────────────────────────────────────────────────────────
 const S: Record<string,React.CSSProperties> = {
   root:{fontFamily:"'Tajawal',sans-serif",direction:"rtl",minHeight:"100vh",background:"#faf8f3",color:"#1a1208"},
   nav:{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"12px 20px",background:"#fff",borderBottom:"2px solid #e8d9b5",position:"sticky",top:0,zIndex:200,boxShadow:"0 2px 8px rgba(0,0,0,0.05)"},
@@ -647,21 +625,26 @@ const S: Record<string,React.CSSProperties> = {
   tab:{flex:1,padding:"8px 4px",border:"1.5px solid #e8d9b5",borderRadius:8,background:"#fff",cursor:"pointer",fontSize:12,fontWeight:600,fontFamily:"inherit",color:"#aaa",display:"flex",alignItems:"center",justifyContent:"center",gap:4},
   tabActive:{background:"#7a5a10",color:"#fff",borderColor:"#7a5a10"},
   tabBadge:{background:"rgba(255,255,255,0.25)",borderRadius:20,padding:"1px 5px",fontSize:10},
-  footer:{textAlign:"center",padding:"16px",color:"#ccc",fontSize:12,borderTop:"1px solid #e8d9b5",marginTop:24},
+  // Footer — darker text
+  footer:{textAlign:"center",padding:"16px",color:"#888",fontSize:12,borderTop:"1px solid #e8d9b5",marginTop:24},
 };
 
 const PM: Record<string,React.CSSProperties> = {
-  overlay:{position:"fixed",inset:0,background:"rgba(0,0,0,0.75)",zIndex:500,display:"flex",alignItems:"center",justifyContent:"center",padding:16},
-  poster:{background:"#ffffff",fontFamily:"'Tajawal',sans-serif",direction:"rtl",borderRadius:12,overflow:"hidden",boxShadow:"0 8px 40px rgba(0,0,0,0.4)",display:"flex",flexDirection:"column"},
-  stripe:{height:6,background:"linear-gradient(to right,#c9a227,#f0d060,#c9a227)",flexShrink:0},
-  header:{textAlign:"center",padding:"10px 12px 6px",flexShrink:0},
-  basmala:{fontSize:13,color:"#c9a227",margin:"0 0 3px"},
-  title:{fontSize:18,fontWeight:900,color:"#6b4d0e",margin:"0 0 2px"},
-  sub:{fontSize:10,color:"#999",margin:0},
-  divider:{textAlign:"center",color:"#c9a227",fontSize:10,letterSpacing:3,padding:"4px 0",flexShrink:0},
-  foot:{textAlign:"center",padding:"6px 12px 8px",flexShrink:0},
-  footText:{fontSize:10,color:"#555",margin:"0 0 2px"},
-  footSite:{fontSize:9,color:"#c9a227",fontWeight:700,margin:0},
+  overlay:{position:"fixed",inset:0,background:"rgba(0,0,0,0.75)",zIndex:500,display:"flex",alignItems:"flex-start",justifyContent:"center",padding:"12px 16px",overflowY:"auto"},
+  wrap:{width:"100%",maxWidth:360,paddingBottom:20},
+  topBar:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8,position:"sticky",top:0,zIndex:10},
+  closeBtn:{background:"rgba(255,255,255,0.2)",border:"none",color:"#fff",borderRadius:"50%",width:32,height:32,cursor:"pointer",fontSize:15,display:"flex",alignItems:"center",justifyContent:"center"},
+  scrollArea:{borderRadius:12,overflow:"hidden",boxShadow:"0 8px 40px rgba(0,0,0,0.4)"},
+  poster:{background:"#ffffff",fontFamily:"'Tajawal',sans-serif",direction:"rtl"},
+  stripe:{height:6,background:"linear-gradient(to right,#c9a227,#f0d060,#c9a227)"},
+  header:{textAlign:"center",padding:"14px 14px 8px"},
+  basmala:{fontSize:14,color:"#c9a227",margin:"0 0 5px"},
+  title:{fontSize:20,fontWeight:900,color:"#6b4d0e",margin:"0 0 3px"},
+  sub:{fontSize:11,color:"#999",margin:0},
+  divider:{textAlign:"center",color:"#c9a227",fontSize:11,letterSpacing:4,padding:"5px 0"},
+  foot:{textAlign:"center",padding:"10px 14px 14px"},
+  footText:{fontSize:11,color:"#555",margin:"0 0 3px"},
+  footSite:{fontSize:10,color:"#c9a227",fontWeight:700,margin:0},
 };
 
 const MC: Record<string,React.CSSProperties> = {
