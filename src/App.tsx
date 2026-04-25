@@ -37,9 +37,20 @@ const dbToEvent = (r:Record<string,unknown>):Event => ({
 // ── Hijri helpers ─────────────────────────────────────────────────
 const parseHijriParts = (d:string):{y:number;m:number;day:number} => {
   const clean = d.replace(/\s*هـ\s*/g,"").trim();
-  const parts = clean.split("/");
-  return {y:parseInt(parts[0])||0, m:parseInt(parts[1])||0, day:parseInt(parts[2])||0};
+  const parts = clean.split("/").map(p=>parseInt(p.trim())||0);
+  if(parts.length < 3) return {y:0,m:0,day:0};
+  // الرقم اللي فيه 4 خانات هو السنة دائماً
+  const yearIdx = parts.findIndex(p=>p>1000);
+  if(yearIdx===2) return {y:parts[2],m:parts[1],day:parts[0]};
+  return {y:parts[0],m:parts[1],day:parts[2]};
 };
+
+const normalizeHijri = (d:string):string => {
+  const {y,m,day} = parseHijriParts(d);
+  if(!y) return d;
+  return `${y}/${String(m).padStart(2,"0")}/${String(day).padStart(2,"0")} هـ`;
+};
+
 const getHijriToday = ():{y:number;m:number;day:number} => {
   try {
     const parts = new Intl.DateTimeFormat("en-u-ca-islamic",{year:"numeric",month:"2-digit",day:"2-digit"}).formatToParts(new Date());
@@ -49,6 +60,7 @@ const getHijriToday = ():{y:number;m:number;day:number} => {
     return {y,m,day:d};
   } catch { return {y:1447,m:10,day:1}; }
 };
+
 const isPast = (hijriDate:string):boolean => {
   const ev = parseHijriParts(hijriDate);
   const tod = getHijriToday();
@@ -56,6 +68,7 @@ const isPast = (hijriDate:string):boolean => {
   if(ev.m !== tod.m) return ev.m < tod.m;
   return ev.day < tod.day;
 };
+
 const hijriToNum = (d:string):number => { const p=parseHijriParts(d); return p.y*10000+p.m*100+p.day; };
 const sortByHijri = (a:Event,b:Event) => hijriToNum(a.hijriDate)-hijriToNum(b.hijriDate);
 const formatHijri = (y:string,m:string,d:string):string => `${y}/${String(m).padStart(2,"0")}/${String(d).padStart(2,"0")} هـ`;
@@ -97,9 +110,13 @@ export default function App() {
   const saveAdmins = (a:AdminAccount[]) => { setAdminAccounts(a); localStorage.setItem("manasbat_admins",JSON.stringify(a)); };
 
   const loadEvents = async () => {
-    try { const rows=await api("GET","events?order=created_at.desc"); if(Array.isArray(rows)) setEvents(rows.map(dbToEvent)); } catch {}
+    try {
+      const rows=await api("GET","events?order=created_at.desc");
+      if(Array.isArray(rows)) setEvents(rows.map(r=>({...dbToEvent(r),hijriDate:normalizeHijri(dbToEvent(r).hijriDate)})));
+    } catch {}
     setLoading(false);
   };
+
   useEffect(()=>{ loadEvents(); },[]);
   useEffect(()=>{
     const h=(e:MouseEvent)=>{ if(sidebarOpen&&sidebarRef.current&&!sidebarRef.current.contains(e.target as Node)) setSidebarOpen(false); };
@@ -130,7 +147,7 @@ export default function App() {
   const deleteAdmin = (id:string) => { if(adminAccounts.length<=1) return; saveAdmins(adminAccounts.filter(a=>a.id!==id)); };
   const saveEditPass = (id:string) => { if(!editPassVal||editPassVal.length<4) return; saveAdmins(adminAccounts.map(a=>a.id===id?{...a,password:editPassVal}:a)); setEditPassId(null); setEditPassVal(""); };
 
-  // Form
+  // Form submit
   const handleSubmit = async () => {
     if(!form.name||!form.hijriYear||!form.hijriMonth||!form.hijriDay||!form.day||!form.phone||!form.venue){ setFormError("يرجى تعبئة جميع الحقول الإلزامية"); return; }
     const hijriDate=formatHijri(form.hijriYear,form.hijriMonth,form.hijriDay);
@@ -162,7 +179,7 @@ export default function App() {
     await loadEvents(); setEditingId(null);
   };
 
-  // ── Cards ──────────────────────────────────────────────────────
+  // ── Event Cards ───────────────────────────────────────────────
   const renderCard = (ev:Event) => {
     const isExp = expandedId===ev.id;
     if(viewMode==="compact") return (
@@ -178,12 +195,7 @@ export default function App() {
             <div style={S.cardRow}><span style={S.cardIcon}>📍</span><span>{ev.venue}</span>{ev.mapLink&&<a href={ev.mapLink} target="_blank" rel="noreferrer" style={S.mapLink}>خريطة</a>}</div>
             <div style={S.cardRow}><span style={S.cardIcon}>📞</span><span>{ev.phone}</span></div>
             {ev.notes&&<p style={S.notesText}>{ev.notes}</p>}
-            <div style={{display:"flex",gap:8,marginTop:10}}>
-              <button style={S.shareBtnSm} onClick={e=>{e.stopPropagation();setShareCardEvent(ev);}}>🎴 بطاقة</button>
-              <button style={{...S.shareBtnSm,background:"#25d366"}} onClick={e=>{e.stopPropagation();shareEventWa(ev);}}>
-                <WaIcon/> مشاركة
-              </button>
-            </div>
+            <button style={S.shareBtn} onClick={e=>{e.stopPropagation();setShareCardEvent(ev);}}>مشاركة</button>
           </div>
         )}
       </div>
@@ -192,10 +204,9 @@ export default function App() {
       <div key={ev.id} className="card" style={S.card}>
         <div style={S.cardHeader}>
           <h3 style={S.cardName}>{ev.name}</h3>
-          <div style={{display:"flex",gap:6}}>
-            <button style={S.iconBtn} onClick={()=>setShareCardEvent(ev)} title="بطاقة مشاركة">🎴</button>
-            <button style={{...S.iconBtn,background:"#25d366",color:"#fff"}} onClick={()=>shareEventWa(ev)} title="مشاركة واتساب"><WaIcon/></button>
-          </div>
+          <button style={S.shareIconBtn} onClick={()=>setShareCardEvent(ev)} title="مشاركة">
+            <ShareIcon/>
+          </button>
         </div>
         <div style={S.cardRow}><span style={S.cardIcon}>📅</span><span>{ev.day}، {ev.hijriDate}</span></div>
         <div style={S.cardRow}><span style={S.cardIcon}>📍</span><span>{ev.venue}</span>{ev.mapLink&&<a href={ev.mapLink} target="_blank" rel="noreferrer" style={S.mapLink}>خريطة</a>}</div>
@@ -242,18 +253,21 @@ export default function App() {
       <style>{css}</style>
 
       {/* Sidebar */}
-      {sidebarOpen&&<div style={S.overlay} onClick={()=>setSidebarOpen(false)}/>}
+      {sidebarOpen&&<div style={S.overlayBg} onClick={()=>setSidebarOpen(false)}/>}
       <div ref={sidebarRef} style={{...S.sidebar,transform:sidebarOpen?"translateX(0)":"translateX(100%)"}}>
         <div style={S.sidebarHeader}>
-          <span style={{fontWeight:800,fontSize:17,color:"#7a5a10"}}>{SITE_NAME}</span>
+          <span style={{fontWeight:800,fontSize:16,color:"#7a5a10"}}>{SITE_NAME}</span>
           <button style={S.closeBtn} onClick={()=>setSidebarOpen(false)}>✕</button>
         </div>
-        <button style={S.sideLink} onClick={()=>nav("home")}>🏠 الرئيسية</button>
-        <button style={S.sideLink} onClick={()=>nav("register")}>✦ تسجيل مناسبة</button>
-        {isAdmin?<button style={S.sideLink} onClick={()=>nav("admin")}>⚙️ لوحة التحكم</button>:<button style={S.sideLink} onClick={()=>nav("login")}>🔐 تسجيل الدخول</button>}
-        {isAdmin&&<button style={{...S.sideLink,color:"#c0392b"}} onClick={handleLogout}>🚪 تسجيل الخروج</button>}
+        <button style={S.sideLink} onClick={()=>nav("home")}>الرئيسية</button>
+        <button style={S.sideLink} onClick={()=>nav("register")}>تسجيل مناسبة</button>
+        {isAdmin
+          ?<button style={S.sideLink} onClick={()=>nav("admin")}>لوحة التحكم</button>
+          :<button style={S.sideLink} onClick={()=>nav("login")}>تسجيل الدخول</button>
+        }
+        {isAdmin&&<button style={{...S.sideLink,color:"#c0392b"}} onClick={handleLogout}>تسجيل الخروج</button>}
         <div style={{borderTop:"1px solid #e8d9b5",marginTop:"auto",paddingTop:12}}>
-          <a href={`https://wa.me/${ADMIN_WA}`} target="_blank" rel="noreferrer" style={{...S.sideLink,color:"#25d366",textDecoration:"none",display:"block"}}>💬 تواصل معنا</a>
+          <a href={`https://wa.me/${ADMIN_WA}`} target="_blank" rel="noreferrer" style={{...S.sideLink,textDecoration:"none",display:"block"}}>تواصل معنا</a>
         </div>
       </div>
 
@@ -269,7 +283,7 @@ export default function App() {
         <div style={S.container}>
           <div style={S.hero}>
             <p style={S.heroSub}>{SITE_SUB}</p>
-            <button className="btn-gold" onClick={()=>setPage("register")}>✦ تسجيل مناسبة جديدة</button>
+            <button className="btn-gold-sm" onClick={()=>setPage("register")}>✦ تسجيل مناسبة جديدة</button>
           </div>
           <div style={S.section}>
             <div style={S.sectionTitleRow}>
@@ -283,7 +297,7 @@ export default function App() {
             {!loading&&activeApproved.length===0&&<p style={S.empty}>لا توجد مناسبات معتمدة حتى الآن</p>}
             <div style={S.grid}>{activeApproved.map(renderCard)}</div>
             {activeApproved.length>0&&(
-              <button style={S.posterBtn} onClick={()=>setShowPoster(true)}>📸 مشاركة جميع المناسبات</button>
+              <button className="btn-poster" onClick={()=>setShowPoster(true)}>مشاركة جميع المناسبات</button>
             )}
           </div>
         </div>
@@ -321,14 +335,14 @@ export default function App() {
       {page==="notify"&&submittedEvent&&(
         <div style={S.container}>
           <div style={S.formWrap}>
-            <div style={{textAlign:"center",padding:"12px 0 24px"}}>
-              <div style={{fontSize:48,marginBottom:12}}>✅</div>
-              <h3 style={{color:"#2e7d32",margin:"0 0 8px",fontSize:19,fontWeight:800}}>تم إرسال طلبك بنجاح!</h3>
-              <p style={{color:"#777",fontSize:14,margin:"0 0 24px",lineHeight:1.7}}>سيتم مراجعة طلبك من قبل الإدارة والموافقة عليه قريباً.</p>
+            <div style={{textAlign:"center",padding:"16px 0 20px"}}>
+              <div style={{fontSize:44,marginBottom:12}}>✅</div>
+              <h3 style={{color:"#2e7d32",margin:"0 0 8px",fontSize:18,fontWeight:800}}>تم إرسال طلبك بنجاح!</h3>
+              <p style={{color:"#888",fontSize:14,margin:"0 0 24px",lineHeight:1.7}}>سيتم مراجعة طلبك من قبل الإدارة والموافقة عليه قريباً.</p>
               <button style={S.waNotifyBtn} onClick={()=>notifyAdmin(submittedEvent)}>
                 <WaIcon/>&nbsp; أرسل إشعاراً للإدارة عبر واتساب
               </button>
-              <p style={{color:"#bbb",fontSize:12,marginTop:10}}>اضغط الزر لإعلام الإدارة حتى يتم اعتماد طلبك بشكل أسرع</p>
+              <p style={{color:"#ccc",fontSize:12,marginTop:8}}>اضغط الزر لإعلام الإدارة حتى يتم اعتماد طلبك بشكل أسرع</p>
               <button style={{...S.back,marginTop:20,textAlign:"center" as const,width:"100%",marginBottom:0}} onClick={()=>setPage("home")}>العودة للرئيسية</button>
             </div>
           </div>
@@ -361,6 +375,7 @@ export default function App() {
             <button style={{...S.tab,...(adminTab==="archived"?S.tabActive:{})}} onClick={()=>setAdminTab("archived")}>السابقة <span style={S.tabBadge}>{archivedEvents.length}</span></button>
             <button style={{...S.tab,...(adminTab==="accounts"?S.tabActive:{})}} onClick={()=>setAdminTab("accounts")}>الحسابات <span style={S.tabBadge}>{adminAccounts.length}</span></button>
           </div>
+
           {adminTab==="active"&&(<div>{adminActive.length===0?<p style={S.empty}>لا توجد طلبات حالية</p>:adminActive.map(renderAdminCard)}</div>)}
           {adminTab==="archived"&&(<div>{archivedEvents.length===0?<p style={S.empty}>لا توجد مناسبات سابقة</p>:archivedEvents.map(renderAdminCard)}</div>)}
           {adminTab==="accounts"&&(
@@ -389,7 +404,7 @@ export default function App() {
               <div style={{...S.adminCard,marginTop:12}}>
                 <p style={{fontWeight:700,color:"#7a5a10",marginBottom:12,fontSize:14}}>+ إضافة مدير جديد</p>
                 <Field label="اسم المدير" placeholder="مثال: خالد" value={newAccLabel} onChange={setNewAccLabel}/>
-                <div style={{display:"flex",gap:8,alignItems:"flex-end",marginBottom:16}}>
+                <div style={{display:"flex",gap:8,alignItems:"flex-end",marginBottom:14}}>
                   <div style={{flex:1}}>
                     <label style={S.label}>كلمة المرور</label>
                     <input style={S.input} value={generatedPass} readOnly placeholder="اضغط توليد"/>
@@ -406,10 +421,7 @@ export default function App() {
 
       <footer style={S.footer}>{SITE_NAME} .. مساهمة مجتمعية</footer>
 
-      {/* Share Card Modal */}
       {shareCardEvent&&<ShareCardModal ev={shareCardEvent} onClose={()=>setShareCardEvent(null)} onWa={shareEventWa}/>}
-
-      {/* Poster Modal */}
       {showPoster&&<PosterModal events={activeApproved} onClose={()=>setShowPoster(false)}/>}
     </div>
   );
@@ -421,21 +433,23 @@ function ShareCardModal({ev,onClose,onWa}:{ev:Event;onClose:()=>void;onWa:(e:Eve
     <div style={M.overlay} onClick={onClose}>
       <div style={M.modal} onClick={e=>e.stopPropagation()}>
         <button style={M.closeBtn} onClick={onClose}>✕</button>
-        <p style={{color:"#999",fontSize:12,textAlign:"center",marginBottom:12}}>صوّر الشاشة لمشاركة البطاقة</p>
+        <p style={{color:"#999",fontSize:12,textAlign:"center",marginBottom:14}}>صوّر الشاشة أو شارك عبر واتساب</p>
         <div style={M.card}>
-          <div style={M.cardTop}>
-            <div style={M.cardOrnament}>❧</div>
-            <p style={M.cardSub}>يسعدنا دعوتكم لحفل زواج</p>
+          <div style={M.cardTopBorder}/>
+          <div style={{textAlign:"center",padding:"18px 16px 6px"}}>
+            <p style={M.cardOrnament}>❧</p>
+            <p style={M.cardInvite}>يسعدنا دعوتكم لحفل زواج</p>
           </div>
           <div style={M.cardDivider}/>
           <h2 style={M.cardName}>{ev.name}</h2>
           <div style={M.cardDivider}/>
-          <div style={M.cardDetail}><span style={M.cardDetailIcon}>📅</span><span><strong>{ev.day}</strong> — {ev.hijriDate}</span></div>
-          <div style={M.cardDetail}><span style={M.cardDetailIcon}>📍</span><span>{ev.venue}</span></div>
-          {ev.notes&&<div style={M.cardDetail}><span style={M.cardDetailIcon}>📝</span><span style={{color:"#888",fontSize:13}}>{ev.notes}</span></div>}
-          <div style={M.cardBottom}>
-            <span style={M.cardBottomText}>زواجات الخيرة</span>
+          <div style={{padding:"4px 20px 16px"}}>
+            <div style={M.cardDetail}><span>📅</span><span><strong>{ev.day}</strong> — {ev.hijriDate}</span></div>
+            <div style={M.cardDetail}><span>📍</span><span>{ev.venue}</span></div>
+            {ev.notes&&<div style={M.cardDetail}><span>📝</span><span style={{color:"#aaa",fontSize:13}}>{ev.notes}</span></div>}
           </div>
+          <div style={M.cardBottom}><span style={M.cardBottomText}>{SITE_NAME}</span></div>
+          <div style={M.cardBottomBorder}/>
         </div>
         <button style={M.waBtn} onClick={()=>onWa(ev)}>
           <WaIcon/>&nbsp; مشاركة عبر واتساب
@@ -450,42 +464,53 @@ function PosterModal({events,onClose}:{events:Event[];onClose:()=>void}) {
   const today = new Date().toLocaleDateString("ar-SA-u-ca-islamic",{year:"numeric",month:"long",day:"numeric"});
   return (
     <div style={M.overlay} onClick={onClose}>
-      <div style={{...M.modal,maxWidth:400,padding:0,background:"transparent",boxShadow:"none"}} onClick={e=>e.stopPropagation()}>
-        <button style={{...M.closeBtn,background:"#fff",top:-40,left:0,borderRadius:"50%",width:36,height:36,display:"flex",alignItems:"center",justifyContent:"center"}} onClick={onClose}>✕</button>
-        <p style={{color:"#fff",fontSize:12,textAlign:"center",marginBottom:10}}>صوّر الشاشة لمشاركة البوستر</p>
+      <div style={{...M.modal,maxWidth:380,padding:0,background:"transparent",boxShadow:"none",borderRadius:0}} onClick={e=>e.stopPropagation()}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8,padding:"0 4px"}}>
+          <p style={{color:"#fff",fontSize:12}}>صوّر الشاشة لمشاركة البوستر</p>
+          <button style={{background:"rgba(255,255,255,0.2)",border:"none",color:"#fff",borderRadius:"50%",width:28,height:28,cursor:"pointer",fontSize:14}} onClick={onClose}>✕</button>
+        </div>
         <div style={P.poster}>
           <div style={P.topBorder}/>
           <div style={P.header}>
-            <div style={P.ornament}>﷽</div>
-            <h1 style={P.title}>زواجات الخيرة</h1>
+            <p style={P.ornament}>﷽</p>
+            <h1 style={P.title}>{SITE_NAME}</h1>
             <p style={P.subtitle}>قبيلة الخيرة — مركز دوقة</p>
-            <div style={P.dateBadge}>{today}</div>
+            <span style={P.dateBadge}>{today}</span>
           </div>
-          <div style={P.divider}><span style={P.dividerDot}>❖</span></div>
+          <div style={P.dividerRow}><span style={P.dividerDot}>— ❖ —</span></div>
           <div style={P.list}>
             {events.map((ev,i)=>(
-              <div key={ev.id} style={{...P.row,...(i%2===0?{}:{background:"rgba(201,162,39,0.04)"})}}>
+              <div key={ev.id} style={{...P.row,...(i%2===0?{}:{background:"rgba(201,162,39,0.05)"})}}>
                 <div style={P.rowNum}>{i+1}</div>
                 <div style={P.rowContent}>
                   <span style={P.rowName}>{ev.name}</span>
-                  <span style={P.rowMeta}>{ev.day} {ev.hijriDate} — {ev.venue}</span>
+                  <span style={P.rowMeta}>{ev.day} {ev.hijriDate} · {ev.venue}</span>
                 </div>
               </div>
             ))}
           </div>
-          <div style={P.divider}><span style={P.dividerDot}>❖</span></div>
-          <div style={P.footer}>
+          <div style={P.dividerRow}><span style={P.dividerDot}>— ❖ —</span></div>
+          <div style={P.posterFooter}>
             <p style={P.footerText}>نبارك للعرسان الكرام ونتمنى لهم حياة سعيدة مباركة</p>
-            <p style={P.footerSite}>زواجات الخيرة — مساهمة مجتمعية</p>
+            <p style={P.footerSite}>{SITE_NAME} — مساهمة مجتمعية</p>
           </div>
-          <div style={P.bottomBorder}/>
+          <div style={P.topBorder}/>
         </div>
       </div>
     </div>
   );
 }
 
-// ── Shared Components ─────────────────────────────────────────────
+// ── Components ────────────────────────────────────────────────────
+function ShareIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/>
+      <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
+    </svg>
+  );
+}
+
 function WaIcon() {
   return <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" style={{flexShrink:0,display:"inline-block",verticalAlign:"middle"}}><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/></svg>;
 }
@@ -527,112 +552,112 @@ const S: Record<string,React.CSSProperties> = {
   nav:{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"12px 20px",background:"#fff",borderBottom:"2px solid #e8d9b5",position:"sticky",top:0,zIndex:200,boxShadow:"0 2px 8px rgba(0,0,0,0.05)"},
   navTitle:{fontSize:17,fontWeight:900,color:"#7a5a10",letterSpacing:"0.02em"},
   hamburger:{background:"none",border:"none",cursor:"pointer",display:"flex",flexDirection:"column",gap:5,padding:6,width:40,alignItems:"flex-end"},
-  overlay:{position:"fixed",inset:0,background:"rgba(0,0,0,0.38)",zIndex:300},
-  sidebar:{position:"fixed",top:0,right:0,height:"100%",width:256,background:"#fff",zIndex:400,boxShadow:"-4px 0 20px rgba(0,0,0,0.1)",display:"flex",flexDirection:"column",padding:20,transition:"transform 0.28s ease",gap:2},
-  sidebarHeader:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:18,paddingBottom:12,borderBottom:"1px solid #e8d9b5"},
+  overlayBg:{position:"fixed",inset:0,background:"rgba(0,0,0,0.38)",zIndex:300},
+  sidebar:{position:"fixed",top:0,right:0,height:"100%",width:240,background:"#fff",zIndex:400,boxShadow:"-4px 0 20px rgba(0,0,0,0.1)",display:"flex",flexDirection:"column",padding:20,transition:"transform 0.28s ease",gap:2},
+  sidebarHeader:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16,paddingBottom:12,borderBottom:"1px solid #e8d9b5"},
   closeBtn:{background:"none",border:"none",cursor:"pointer",fontSize:18,color:"#aaa"},
-  sideLink:{background:"none",border:"none",cursor:"pointer",color:"#1a1208",fontSize:14,fontWeight:600,padding:"11px 8px",textAlign:"right",borderRadius:8,fontFamily:"inherit",width:"100%"},
-  container:{maxWidth:680,margin:"0 auto",padding:"20px 16px 40px"},
-  hero:{padding:"20px 4px 16px"},
-  heroSub:{fontSize:13,color:"#999",marginBottom:16,lineHeight:1.6},
-  section:{marginTop:4},
+  sideLink:{background:"none",border:"none",cursor:"pointer",color:"#1a1208",fontSize:15,fontWeight:600,padding:"12px 8px",textAlign:"right",borderRadius:8,fontFamily:"inherit",width:"100%"},
+  container:{maxWidth:680,margin:"0 auto",padding:"0 16px 40px"},
+  hero:{padding:"14px 4px 16px",borderBottom:"1px solid #f0e8d8",marginBottom:16},
+  heroSub:{fontSize:13,color:"#aaa",marginBottom:14,lineHeight:1.7},
+  section:{},
   sectionTitleRow:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14},
-  sectionTitle:{fontSize:17,fontWeight:800,color:"#1a1208",margin:0},
+  sectionTitle:{fontSize:16,fontWeight:800,color:"#1a1208",margin:0},
   viewToggle:{display:"flex",gap:4},
-  viewBtn:{background:"#f5f0e8",border:"1px solid #e8d9b5",borderRadius:7,width:32,height:32,cursor:"pointer",fontSize:16,color:"#aaa",display:"flex",alignItems:"center",justifyContent:"center"},
+  viewBtn:{background:"#f5f0e8",border:"1px solid #e8d9b5",borderRadius:7,width:30,height:30,cursor:"pointer",fontSize:15,color:"#aaa",display:"flex",alignItems:"center",justifyContent:"center"},
   viewBtnActive:{background:"#7a5a10",color:"#fff",borderColor:"#7a5a10"},
-  grid:{display:"flex",flexDirection:"column",gap:10},
-  card:{background:"#fff",borderRadius:13,padding:"15px 17px",border:"1px solid #e8d9b5",boxShadow:"0 1px 5px rgba(0,0,0,0.04)"},
-  cardHeader:{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10},
+  grid:{display:"flex",flexDirection:"column",gap:9},
+  card:{background:"#fff",borderRadius:12,padding:"14px 16px",border:"1px solid #e8d9b5",boxShadow:"0 1px 4px rgba(0,0,0,0.04)"},
+  cardHeader:{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:9},
   cardName:{fontSize:16,fontWeight:800,color:"#6b4d0e",margin:0,flex:1,lineHeight:1.4},
-  iconBtn:{display:"flex",alignItems:"center",justifyContent:"center",width:34,height:34,borderRadius:9,background:"#f5f0e8",border:"none",cursor:"pointer",fontSize:15,flexShrink:0,marginRight:4},
+  shareIconBtn:{display:"flex",alignItems:"center",justifyContent:"center",width:30,height:30,borderRadius:8,background:"transparent",border:"1.5px solid #e0cfa0",cursor:"pointer",color:"#c9a227",flexShrink:0},
+  shareBtn:{background:"transparent",border:"1.5px solid #e0cfa0",color:"#8b6914",borderRadius:8,padding:"6px 14px",cursor:"pointer",fontFamily:"inherit",fontWeight:600,fontSize:12,marginTop:10},
   cardRow:{display:"flex",alignItems:"center",gap:8,fontSize:13,color:"#555",marginBottom:5},
   cardIcon:{fontSize:13,flexShrink:0},
   mapLink:{color:"#8b6914",fontSize:12,textDecoration:"underline",marginRight:"auto"},
-  notesText:{margin:"6px 0 0",fontSize:12,color:"#aaa",lineHeight:1.5},
-  compactCard:{background:"#fff",borderRadius:10,padding:"11px 14px",border:"1px solid #e8d9b5",cursor:"pointer"},
+  notesText:{margin:"5px 0 0",fontSize:12,color:"#bbb",lineHeight:1.5},
+  compactCard:{background:"#fff",borderRadius:9,padding:"10px 14px",border:"1px solid #e8d9b5",cursor:"pointer"},
   compactRow:{display:"flex",alignItems:"center",gap:8},
   compactName:{flex:1,fontWeight:700,fontSize:14,color:"#6b4d0e"},
-  compactDate:{color:"#999",fontSize:12,flexShrink:0},
-  chevron:{color:"#c9a227",fontSize:10,transition:"transform 0.2s",flexShrink:0},
-  compactDetails:{marginTop:10,paddingTop:10,borderTop:"1px solid #f5ede0"},
-  shareBtnSm:{display:"flex",alignItems:"center",gap:6,background:"#f5f0e8",color:"#7a5a10",border:"none",borderRadius:8,padding:"7px 12px",cursor:"pointer",fontFamily:"inherit",fontWeight:600,fontSize:12},
-  posterBtn:{display:"block",width:"100%",marginTop:18,padding:"12px",background:"linear-gradient(135deg,#c9a227,#7a5a10)",color:"#fff",border:"none",borderRadius:11,fontFamily:"inherit",fontWeight:700,fontSize:14,cursor:"pointer",letterSpacing:"0.02em"},
-  empty:{textAlign:"center",color:"#ccc",padding:28,fontSize:14},
-  formWrap:{background:"#fff",borderRadius:18,padding:"24px 20px",border:"1px solid #e8d9b5",boxShadow:"0 2px 12px rgba(0,0,0,0.04)"},
-  formTitle:{fontSize:20,fontWeight:800,color:"#6b4d0e",marginBottom:18,textAlign:"center"},
-  fieldGroup:{marginBottom:15},
+  compactDate:{color:"#aaa",fontSize:12,flexShrink:0},
+  chevron:{color:"#c9a227",fontSize:9,transition:"transform 0.2s",flexShrink:0},
+  compactDetails:{marginTop:9,paddingTop:9,borderTop:"1px solid #f5ede0"},
+  empty:{textAlign:"center",color:"#ccc",padding:28,fontSize:13},
+  formWrap:{background:"#fff",borderRadius:16,padding:"22px 18px",border:"1px solid #e8d9b5",boxShadow:"0 2px 10px rgba(0,0,0,0.04)",marginTop:20},
+  formTitle:{fontSize:19,fontWeight:800,color:"#6b4d0e",marginBottom:16,textAlign:"center"},
+  fieldGroup:{marginBottom:14},
   label:{display:"block",fontWeight:700,color:"#1a1208",marginBottom:6,fontSize:13},
-  input:{width:"100%",padding:"10px 12px",border:"1.5px solid #e0cfa0",borderRadius:9,fontSize:13,background:"#fffdf7",color:"#1a1208",outline:"none",boxSizing:"border-box",fontFamily:"inherit"},
-  select:{width:"100%",padding:"10px 12px",border:"1.5px solid #e0cfa0",borderRadius:9,fontSize:13,background:"#fffdf7",color:"#1a1208",outline:"none",boxSizing:"border-box",fontFamily:"inherit"},
-  textarea:{width:"100%",padding:"10px 12px",border:"1.5px solid #e0cfa0",borderRadius:9,fontSize:13,background:"#fffdf7",color:"#1a1208",outline:"none",boxSizing:"border-box",fontFamily:"inherit",resize:"vertical"},
+  input:{width:"100%",padding:"10px 12px",border:"1.5px solid #e0cfa0",borderRadius:8,fontSize:13,background:"#fffdf7",color:"#1a1208",outline:"none",boxSizing:"border-box",fontFamily:"inherit"},
+  select:{width:"100%",padding:"10px 12px",border:"1.5px solid #e0cfa0",borderRadius:8,fontSize:13,background:"#fffdf7",color:"#1a1208",outline:"none",boxSizing:"border-box",fontFamily:"inherit"},
+  textarea:{width:"100%",padding:"10px 12px",border:"1.5px solid #e0cfa0",borderRadius:8,fontSize:13,background:"#fffdf7",color:"#1a1208",outline:"none",boxSizing:"border-box",fontFamily:"inherit",resize:"vertical"},
   error:{color:"#c0392b",fontSize:12,textAlign:"center",marginBottom:8},
-  waNotifyBtn:{display:"flex",alignItems:"center",justifyContent:"center",gap:8,background:"#25d366",color:"#fff",border:"none",borderRadius:11,padding:"13px 20px",cursor:"pointer",fontFamily:"inherit",fontWeight:700,fontSize:15,width:"100%"},
-  back:{background:"none",border:"none",cursor:"pointer",color:"#8b6914",fontSize:13,fontWeight:600,padding:0,marginBottom:12,fontFamily:"inherit",display:"block"},
-  adminCard:{background:"#fff",borderRadius:11,padding:"13px 15px",border:"1px solid #e8d9b5",marginBottom:9},
+  waNotifyBtn:{display:"flex",alignItems:"center",justifyContent:"center",gap:8,background:"#25d366",color:"#fff",border:"none",borderRadius:10,padding:"12px",cursor:"pointer",fontFamily:"inherit",fontWeight:700,fontSize:14,width:"100%"},
+  back:{background:"none",border:"none",cursor:"pointer",color:"#8b6914",fontSize:13,fontWeight:600,padding:0,marginBottom:10,fontFamily:"inherit",display:"block"},
+  adminCard:{background:"#fff",borderRadius:10,padding:"12px 14px",border:"1px solid #e8d9b5",marginBottom:8},
   adminCardInner:{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:10},
   adminCardInfo:{display:"flex",flexDirection:"column",gap:3,flex:1},
   adminActions:{display:"flex",flexDirection:"column",gap:5,flexShrink:0},
-  statusBadge:{display:"inline-block",padding:"3px 9px",borderRadius:20,fontSize:11,fontWeight:700,width:"fit-content"},
-  editBtn:{background:"#f5f5f5",border:"none",borderRadius:7,width:32,height:32,cursor:"pointer",fontSize:14},
-  toggleBtn:{border:"none",borderRadius:7,width:32,height:32,cursor:"pointer",fontSize:14},
-  deleteBtn:{background:"#ffeaea",border:"none",borderRadius:7,width:32,height:32,cursor:"pointer",fontSize:14},
-  cancelBtn:{background:"#f0f0f0",border:"none",borderRadius:9,padding:"8px 14px",cursor:"pointer",fontSize:13,fontFamily:"inherit",fontWeight:600},
-  genBtn:{background:"#7a5a10",color:"#fff",border:"none",borderRadius:9,padding:"10px 14px",cursor:"pointer",fontFamily:"inherit",fontWeight:700,fontSize:13,whiteSpace:"nowrap" as const},
-  tabs:{display:"flex",gap:6,marginBottom:14},
-  tab:{flex:1,padding:"9px 4px",border:"1.5px solid #e8d9b5",borderRadius:9,background:"#fff",cursor:"pointer",fontSize:12,fontWeight:600,fontFamily:"inherit",color:"#aaa",display:"flex",alignItems:"center",justifyContent:"center",gap:4},
+  statusBadge:{display:"inline-block",padding:"2px 8px",borderRadius:20,fontSize:11,fontWeight:700,width:"fit-content"},
+  editBtn:{background:"#f5f5f5",border:"none",borderRadius:6,width:30,height:30,cursor:"pointer",fontSize:13},
+  toggleBtn:{border:"none",borderRadius:6,width:30,height:30,cursor:"pointer",fontSize:13},
+  deleteBtn:{background:"#ffeaea",border:"none",borderRadius:6,width:30,height:30,cursor:"pointer",fontSize:13},
+  cancelBtn:{background:"#f0f0f0",border:"none",borderRadius:8,padding:"8px 12px",cursor:"pointer",fontSize:13,fontFamily:"inherit",fontWeight:600},
+  genBtn:{background:"#7a5a10",color:"#fff",border:"none",borderRadius:8,padding:"10px 12px",cursor:"pointer",fontFamily:"inherit",fontWeight:700,fontSize:13,whiteSpace:"nowrap" as const},
+  tabs:{display:"flex",gap:5,marginBottom:12},
+  tab:{flex:1,padding:"8px 4px",border:"1.5px solid #e8d9b5",borderRadius:8,background:"#fff",cursor:"pointer",fontSize:12,fontWeight:600,fontFamily:"inherit",color:"#aaa",display:"flex",alignItems:"center",justifyContent:"center",gap:4},
   tabActive:{background:"#7a5a10",color:"#fff",borderColor:"#7a5a10"},
   tabBadge:{background:"rgba(255,255,255,0.25)",borderRadius:20,padding:"1px 5px",fontSize:10},
-  footer:{textAlign:"center",padding:"18px 16px",color:"#ccc",fontSize:12,borderTop:"1px solid #e8d9b5",marginTop:28},
+  footer:{textAlign:"center",padding:"16px",color:"#ccc",fontSize:12,borderTop:"1px solid #e8d9b5",marginTop:24},
 };
 
-// Share card modal styles
 const M: Record<string,React.CSSProperties> = {
-  overlay:{position:"fixed",inset:0,background:"rgba(0,0,0,0.6)",zIndex:500,display:"flex",alignItems:"center",justifyContent:"center",padding:20},
-  modal:{background:"#fff",borderRadius:20,padding:20,width:"100%",maxWidth:360,position:"relative",maxHeight:"90vh",overflowY:"auto"},
-  closeBtn:{position:"absolute",top:12,left:12,background:"none",border:"none",fontSize:18,cursor:"pointer",color:"#aaa",zIndex:1},
-  card:{background:"linear-gradient(160deg,#fffdf5,#fff8e8)",border:"2px solid #c9a227",borderRadius:16,padding:"24px 20px",textAlign:"center",position:"relative",overflow:"hidden"},
-  cardTop:{marginBottom:16},
-  cardOrnament:{fontSize:28,color:"#c9a227",lineHeight:1},
-  cardSub:{fontSize:12,color:"#aaa",margin:"4px 0 0",letterSpacing:"0.05em"},
-  cardDivider:{height:1,background:"linear-gradient(to right,transparent,#c9a227,transparent)",margin:"14px 0"},
-  cardName:{fontSize:22,fontWeight:900,color:"#6b4d0e",margin:"0 0 4px",lineHeight:1.3},
-  cardDetail:{display:"flex",alignItems:"flex-start",gap:8,textAlign:"right",fontSize:14,color:"#444",marginBottom:8,justifyContent:"center"},
-  cardDetailIcon:{fontSize:14,flexShrink:0},
-  cardBottom:{marginTop:16,paddingTop:12,borderTop:"1px solid #e8d9b5"},
-  cardBottomText:{fontSize:12,color:"#c9a227",fontWeight:700,letterSpacing:"0.08em"},
-  waBtn:{display:"flex",alignItems:"center",justifyContent:"center",gap:8,background:"#25d366",color:"#fff",border:"none",borderRadius:11,padding:"12px",cursor:"pointer",fontFamily:"inherit",fontWeight:700,fontSize:14,width:"100%",marginTop:14},
+  overlay:{position:"fixed",inset:0,background:"rgba(0,0,0,0.65)",zIndex:500,display:"flex",alignItems:"center",justifyContent:"center",padding:20},
+  modal:{background:"#fff",borderRadius:18,padding:18,width:"100%",maxWidth:340,position:"relative",maxHeight:"90vh",overflowY:"auto"},
+  closeBtn:{position:"absolute",top:10,left:10,background:"none",border:"none",fontSize:17,cursor:"pointer",color:"#aaa"},
+  card:{background:"linear-gradient(160deg,#fffdf5,#fff8e8)",border:"2px solid #c9a227",borderRadius:14,overflow:"hidden"},
+  cardTopBorder:{height:6,background:"linear-gradient(to right,#c9a227,#f0d060,#c9a227)"},
+  cardOrnament:{fontSize:24,color:"#c9a227",margin:"0 0 4px",textAlign:"center"},
+  cardInvite:{fontSize:12,color:"#aaa",margin:0,textAlign:"center",letterSpacing:"0.04em"},
+  cardDivider:{height:1,background:"linear-gradient(to right,transparent,#c9a227,transparent)",margin:"12px 20px"},
+  cardName:{fontSize:20,fontWeight:900,color:"#6b4d0e",textAlign:"center",margin:"0 20px 8px",lineHeight:1.3},
+  cardDetail:{display:"flex",alignItems:"flex-start",gap:8,fontSize:13,color:"#444",marginBottom:7,justifyContent:"center"},
+  cardBottom:{textAlign:"center",padding:"8px",borderTop:"1px solid #e8d9b5"},
+  cardBottomText:{fontSize:11,color:"#c9a227",fontWeight:700,letterSpacing:"0.08em"},
+  cardBottomBorder:{height:6,background:"linear-gradient(to right,#c9a227,#f0d060,#c9a227)"},
+  waBtn:{display:"flex",alignItems:"center",justifyContent:"center",gap:8,background:"#25d366",color:"#fff",border:"none",borderRadius:10,padding:"11px",cursor:"pointer",fontFamily:"inherit",fontWeight:700,fontSize:14,width:"100%",marginTop:12},
 };
 
-// Poster styles
 const P: Record<string,React.CSSProperties> = {
-  poster:{background:"linear-gradient(175deg,#fffdf5 0%,#fff8e8 50%,#fffdf5 100%)",width:"100%",maxWidth:400,borderRadius:16,overflow:"hidden",boxShadow:"0 8px 40px rgba(0,0,0,0.3)"},
-  topBorder:{height:8,background:"linear-gradient(to right,#c9a227,#f0d060,#c9a227)"},
-  header:{textAlign:"center",padding:"20px 20px 12px"},
-  ornament:{fontSize:18,color:"#c9a227",marginBottom:6},
-  title:{fontSize:26,fontWeight:900,color:"#6b4d0e",margin:"0 0 4px"},
-  subtitle:{fontSize:12,color:"#999",margin:"0 0 10px"},
-  dateBadge:{display:"inline-block",background:"rgba(201,162,39,0.12)",color:"#8b6914",fontSize:12,fontWeight:700,padding:"4px 14px",borderRadius:20,border:"1px solid #e8d9b5"},
-  divider:{textAlign:"center",margin:"10px 0",color:"#c9a227",fontSize:14,letterSpacing:8},
+  poster:{background:"linear-gradient(175deg,#fffdf5,#fff8e8,#fffdf5)",width:"100%",borderRadius:14,overflow:"hidden",boxShadow:"0 8px 40px rgba(0,0,0,0.3)"},
+  topBorder:{height:7,background:"linear-gradient(to right,#c9a227,#f0d060,#c9a227)"},
+  header:{textAlign:"center",padding:"16px 16px 10px"},
+  ornament:{fontSize:16,color:"#c9a227",margin:"0 0 6px"},
+  title:{fontSize:22,fontWeight:900,color:"#6b4d0e",margin:"0 0 4px"},
+  subtitle:{fontSize:12,color:"#aaa",margin:"0 0 8px"},
+  dateBadge:{display:"inline-block",background:"rgba(201,162,39,0.1)",color:"#8b6914",fontSize:11,fontWeight:700,padding:"3px 12px",borderRadius:20,border:"1px solid #e8d9b5"},
+  dividerRow:{textAlign:"center",margin:"8px 0",color:"#c9a227",fontSize:12,letterSpacing:4},
   dividerDot:{},
-  list:{padding:"0 16px"},
-  row:{display:"flex",alignItems:"flex-start",gap:10,padding:"10px 8px",borderRadius:8},
-  rowNum:{width:22,height:22,borderRadius:"50%",background:"#c9a227",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:800,flexShrink:0,marginTop:2},
+  list:{padding:"0 12px"},
+  row:{display:"flex",alignItems:"flex-start",gap:8,padding:"8px 6px",borderRadius:6},
+  rowNum:{width:20,height:20,borderRadius:"50%",background:"#c9a227",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,fontWeight:800,flexShrink:0,marginTop:2},
   rowContent:{flex:1},
-  rowName:{display:"block",fontWeight:800,fontSize:15,color:"#1a1208",marginBottom:2},
-  rowMeta:{display:"block",fontSize:12,color:"#888"},
-  footer:{textAlign:"center",padding:"12px 20px 16px"},
-  footerText:{fontSize:13,color:"#888",margin:"0 0 6px",lineHeight:1.6},
-  footerSite:{fontSize:12,color:"#c9a227",fontWeight:700,margin:0},
-  bottomBorder:{height:8,background:"linear-gradient(to right,#c9a227,#f0d060,#c9a227)"},
+  rowName:{display:"block",fontWeight:800,fontSize:14,color:"#1a1208",marginBottom:1},
+  rowMeta:{display:"block",fontSize:11,color:"#999"},
+  posterFooter:{textAlign:"center",padding:"10px 16px 14px"},
+  footerText:{fontSize:12,color:"#aaa",margin:"0 0 4px",lineHeight:1.6},
+  footerSite:{fontSize:11,color:"#c9a227",fontWeight:700,margin:0},
 };
 
 const css = `
   @import url('https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800;900&display=swap');
   * { box-sizing: border-box; margin: 0; }
-  .btn-gold { background: linear-gradient(135deg,#c9a227,#7a5a10); color:#fff; border:none; border-radius:10px; padding:11px 22px; font-size:14px; font-weight:700; cursor:pointer; font-family:inherit; transition:opacity 0.2s; }
+  .btn-gold { background: linear-gradient(135deg,#c9a227,#7a5a10); color:#fff; border:none; border-radius:9px; padding:11px 22px; font-size:14px; font-weight:700; cursor:pointer; font-family:inherit; transition:opacity 0.2s; }
   .btn-gold:hover { opacity:0.87; }
-  .card:hover { box-shadow:0 3px 14px rgba(0,0,0,0.07) !important; }
+  .btn-gold-sm { background: linear-gradient(135deg,#c9a227,#7a5a10); color:#fff; border:none; border-radius:9px; padding:9px 20px; font-size:13px; font-weight:700; cursor:pointer; font-family:inherit; transition:opacity 0.2s; }
+  .btn-gold-sm:hover { opacity:0.87; }
+  .btn-poster { display:block; width:100%; margin-top:16px; padding:10px; background:transparent; color:#8b6914; border:1.5px solid #e0cfa0; border-radius:9px; font-family:inherit; font-weight:700; font-size:13px; cursor:pointer; letter-spacing:0.02em; transition:background 0.2s; }
+  .btn-poster:hover { background:#fdf8ee; }
+  .card:hover { box-shadow:0 3px 12px rgba(0,0,0,0.07) !important; }
   input:focus,select:focus,textarea:focus { border-color:#c9a227 !important; box-shadow:0 0 0 3px rgba(201,162,39,0.1); }
   nav button span { display:block; width:20px; height:2px; background:#7a5a10; border-radius:2px; }
 `;
