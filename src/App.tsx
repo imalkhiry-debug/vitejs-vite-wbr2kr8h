@@ -30,15 +30,6 @@ const initialForm: FormData = {
 name: “”, hijriDate: “”, day: “”, phone: “”, venue: “”, mapLink: “”, notes: “”,
 };
 
-declare global {
-interface Window {
-storage: {
-get: (key: string) => Promise<{ value: string } | null>;
-set: (key: string, value: string) => Promise<unknown>;
-};
-}
-}
-
 function generateId(): string {
 return Date.now().toString(36) + Math.random().toString(36).slice(2);
 }
