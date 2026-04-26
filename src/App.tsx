@@ -65,12 +65,15 @@ const generateId = ():string => Date.now().toString(36)+Math.random().toString(3
 const generatePass = ():string => Math.random().toString(36).slice(2,8).toUpperCase();
 const getMonthName = (hijriDate:string):string => { const {m}=parseHijriParts(hijriDate); return m>0?HIJRI_MONTHS[m-1]:""; };
 
-// ── Auto day from hijri date ──────────────────────────────────────
+// ── Auto day from hijri ───────────────────────────────────────────
 const hijriToGregorian = (hy:number, hm:number, hd:number):Date|null => {
   try {
-    // Approximate gregorian date
-    const approxMs = new Date(Math.floor(hy * 354.367 / 365.25) + 621, Math.floor((hm-1)*30.4), hd).getTime();
-    for(let offset=-90; offset<=90; offset++) {
+    // مرجع معروف: 1446/01/01 = 7 يوليو 2024
+    const REF_MS = new Date('2024-07-07').getTime();
+    const refDays = 1445 * 354.367;
+    const targetDays = (hy-1) * 354.367 + (hm-1) * 29.53 + (hd-1);
+    const approxMs = REF_MS + (targetDays - refDays) * 86400000;
+    for(let offset=-45; offset<=45; offset++) {
       const d = new Date(approxMs + offset*86400000);
       const parts = new Intl.DateTimeFormat("en-u-ca-islamic",{year:"numeric",month:"2-digit",day:"2-digit"}).formatToParts(d);
       const y=parseInt(parts.find(p=>p.type==="year")?.value||"0");
@@ -95,6 +98,7 @@ export default function App() {
   const [events, setEvents] = useState<Event[]>([]);
   const [form, setForm] = useState<FormData>(initialForm);
   const [formError, setFormError] = useState("");
+  const [formTouched, setFormTouched] = useState<Record<string,boolean>>({});
   const [submittedEvent, setSubmittedEvent] = useState<Event|null>(null);
   const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode] = useState<"full"|"list">(() => (localStorage.getItem("manasbat_view")||"full") as "full"|"list");
@@ -138,7 +142,7 @@ export default function App() {
   const nav = (p:string) => { setPage(p); setSidebarOpen(false); setShowFilter(false); setShowViewMenu(false); };
   const closeDropdowns = () => { setShowFilter(false); setShowViewMenu(false); };
 
-  // Auto-fill day when hijri date changes
+  // Auto-fill day
   const handleHijriChange = (y:string, m:string, d:string) => {
     const autoDay = getHijriDayName(y, m, d);
     setForm(prev=>({...prev, hijriYear:y, hijriMonth:m, hijriDay:d, day:autoDay||prev.day}));
@@ -147,6 +151,11 @@ export default function App() {
     const autoDay = getHijriDayName(y, m, d);
     setEditForm(prev=>({...prev, hijriYear:y, hijriMonth:m, hijriDay:d, day:autoDay||prev.day}));
   };
+
+  // Required fields check
+  const requiredFields = ["name","hijriYear","hijriMonth","hijriDay","day","phone","venue"];
+  const isFieldError = (field:string) => formTouched[field] && !form[field as keyof FormData];
+  const errStyle = (field:string):React.CSSProperties => isFieldError(field) ? {borderColor:"#e53e3e",boxShadow:"0 0 0 3px rgba(229,62,62,0.1)"} : {};
 
   const allApproved = events.filter(e=>e.status==="approved"&&!isPast(e.hijriDate)).sort(sortByHijri);
   const activeApproved = allApproved.filter(e=>{
@@ -173,11 +182,18 @@ export default function App() {
   const saveEditPass = (id:string) => { if(!editPassVal||editPassVal.length<4) return; saveAdmins(adminAccounts.map(a=>a.id===id?{...a,password:editPassVal}:a)); setEditPassId(null); setEditPassVal(""); };
 
   const handleSubmit = async () => {
-    if(!form.name||!form.hijriYear||!form.hijriMonth||!form.hijriDay||!form.day||!form.phone||!form.venue){ setFormError("يرجى تعبئة جميع الحقول الإلزامية"); return; }
+    // Mark all required fields as touched to show errors
+    const touched:Record<string,boolean> = {};
+    requiredFields.forEach(f=>touched[f]=true);
+    setFormTouched(touched);
+    if(!form.name||!form.hijriYear||!form.hijriMonth||!form.hijriDay||!form.day||!form.phone||!form.venue){
+      setFormError("يرجى تعبئة الحقول المميزة باللون الأحمر");
+      return;
+    }
     const hijriDate=formatHijri(form.hijriYear,form.hijriMonth,form.hijriDay);
     const newEv:Event={id:generateId(),name:form.name,hijriDate,day:form.day,phone:form.phone,venue:form.venue,mapLink:form.mapLink,notes:form.notes,status:"pending",createdAt:Date.now()};
     await api("POST","events",{id:newEv.id,name:newEv.name,hijri_date:newEv.hijriDate,day:newEv.day,phone:newEv.phone,venue:newEv.venue,map_link:newEv.mapLink,notes:newEv.notes,status:"pending",created_at:newEv.createdAt});
-    await loadEvents(); setSubmittedEvent(newEv); setForm(initialForm); setFormError(""); setPage("notify");
+    await loadEvents(); setSubmittedEvent(newEv); setForm(initialForm); setFormError(""); setFormTouched({}); setPage("notify");
   };
 
   const notifyAdmin = (ev:Event) => {
@@ -206,7 +222,6 @@ export default function App() {
     const venueEl = ev.mapLink
       ? <a href={ev.mapLink} target="_blank" rel="noreferrer" style={S.venueLink} onClick={e=>e.stopPropagation()}>{ev.venue}</a>
       : <span>{ev.venue}</span>;
-
     if(viewMode==="list") return (
       <div key={ev.id} style={S.compactCard} onClick={()=>{ closeDropdowns(); setExpandedId(isExp?null:ev.id); }}>
         <div style={S.compactRow}>
@@ -251,7 +266,6 @@ export default function App() {
               <option value="">اختر اليوم</option>
               {DAYS.map(d=><option key={d} value={d}>{d}</option>)}
             </select>
-            {editForm.day&&<small style={{color:"#aaa",fontSize:11,marginTop:3,display:"block"}}>تم تحديده تلقائياً — يمكنك تغييره</small>}
           </div>
           <Field label="رقم الجوال" value={editForm.phone} onChange={v=>setEditForm({...editForm,phone:v})}/>
           <Field label="العنوان" value={editForm.venue} onChange={v=>setEditForm({...editForm,venue:v})}/>
@@ -362,9 +376,7 @@ export default function App() {
             {loading&&<p style={S.empty}>جاري التحميل...</p>}
             {!loading&&activeApproved.length===0&&<p style={S.empty}>{hasFilter?"لا توجد نتائج":"لا توجد مناسبات معتمدة حتى الآن"}</p>}
             <div style={S.grid}>{activeApproved.map(renderCard)}</div>
-            {allApproved.length>0&&(
-              <button className="btn-poster" onClick={()=>setShowPoster(true)}>مشاركة جميع المناسبات</button>
-            )}
+            {allApproved.length>0&&<button className="btn-poster" onClick={()=>setShowPoster(true)}>مشاركة جميع المناسبات</button>}
           </div>
         </div>
       )}
@@ -374,23 +386,68 @@ export default function App() {
           <div style={S.formWrap}>
             <button style={S.back} onClick={()=>setPage("home")}>← العودة</button>
             <h2 style={S.formTitle}>تسجيل مناسبة جديدة</h2>
-            <Field label="اسم صاحب المناسبة *" placeholder="مثال: فلان بن فلان الفلاني" value={form.name} onChange={v=>setForm({...form,name:v})}/>
-            <HijriField year={form.hijriYear} month={form.hijriMonth} day={form.hijriDay} onChange={handleHijriChange}/>
+
+            {/* Name */}
             <div style={S.fieldGroup}>
-              <label style={S.label}>اليوم *</label>
-              <select style={S.select} value={form.day} onChange={e=>setForm({...form,day:e.target.value})}>
+              <label style={{...S.label,...(isFieldError("name")?S.labelErr:{})}}>اسم صاحب المناسبة *</label>
+              <input style={{...S.input,...errStyle("name")}} placeholder="مثال: فلان بن فلان الفلاني" value={form.name} onChange={e=>setForm({...form,name:e.target.value})}/>
+              {isFieldError("name")&&<small style={S.fieldErrMsg}>هذا الحقل مطلوب</small>}
+            </div>
+
+            {/* Hijri date */}
+            <div style={S.fieldGroup}>
+              <label style={{...S.label,...((isFieldError("hijriYear")||isFieldError("hijriMonth")||isFieldError("hijriDay"))?S.labelErr:{})}}>التاريخ الهجري *</label>
+              <div style={{display:"flex",gap:8}}>
+                <select style={{...S.select,flex:2,...errStyle("hijriYear")}} value={form.hijriYear} onChange={e=>handleHijriChange(e.target.value,form.hijriMonth,form.hijriDay)}>
+                  <option value="">السنة</option>
+                  {HIJRI_YEARS.map(y=><option key={y} value={String(y)}>{y} هـ</option>)}
+                </select>
+                <select style={{...S.select,flex:3,...errStyle("hijriMonth")}} value={form.hijriMonth} onChange={e=>handleHijriChange(form.hijriYear,e.target.value,form.hijriDay)}>
+                  <option value="">الشهر</option>
+                  {HIJRI_MONTHS.map((m,i)=><option key={i} value={String(i+1).padStart(2,"0")}>{m}</option>)}
+                </select>
+                <select style={{...S.select,flex:2,...errStyle("hijriDay")}} value={form.hijriDay} onChange={e=>handleHijriChange(form.hijriYear,form.hijriMonth,e.target.value)}>
+                  <option value="">اليوم</option>
+                  {Array.from({length:30},(_,i)=><option key={i+1} value={String(i+1).padStart(2,"0")}>{i+1}</option>)}
+                </select>
+              </div>
+              {(isFieldError("hijriYear")||isFieldError("hijriMonth")||isFieldError("hijriDay"))&&<small style={S.fieldErrMsg}>يرجى تحديد التاريخ كاملاً</small>}
+            </div>
+
+            {/* Day — auto filled */}
+            <div style={S.fieldGroup}>
+              <label style={{...S.label,...(isFieldError("day")?S.labelErr:{})}}>اليوم *</label>
+              <select style={{...S.select,...errStyle("day")}} value={form.day} onChange={e=>setForm({...form,day:e.target.value})}>
                 <option value="">اختر اليوم</option>
                 {DAYS.map(d=><option key={d} value={d}>{d}</option>)}
               </select>
-              {form.day&&<small style={{color:"#c9a227",fontSize:11,marginTop:3,display:"block"}}>✓ تم تحديده تلقائياً — يمكنك تغييره إذا كان خطأ</small>}
+              {form.day&&!isFieldError("day")&&<small style={{color:"#c9a227",fontSize:11,marginTop:3,display:"block"}}>✓ تم تحديده تلقائياً — يمكنك تغييره إذا كان خطأ</small>}
+              {isFieldError("day")&&<small style={S.fieldErrMsg}>هذا الحقل مطلوب</small>}
             </div>
-            <Field label="رقم الجوال للتواصل *" placeholder="0500000000" value={form.phone} onChange={v=>setForm({...form,phone:v})}/>
-            <Field label="عنوان المناسبة (القاعة / المدينة) *" placeholder="مثال: قاعة ليلتي، الرياض" value={form.venue} onChange={v=>setForm({...form,venue:v})}/>
+
+            {/* Phone */}
+            <div style={S.fieldGroup}>
+              <label style={{...S.label,...(isFieldError("phone")?S.labelErr:{})}}>رقم الجوال للتواصل *</label>
+              <input style={{...S.input,...errStyle("phone")}} placeholder="0500000000" value={form.phone} onChange={e=>setForm({...form,phone:e.target.value})}/>
+              {isFieldError("phone")&&<small style={S.fieldErrMsg}>هذا الحقل مطلوب</small>}
+            </div>
+
+            {/* Venue */}
+            <div style={S.fieldGroup}>
+              <label style={{...S.label,...(isFieldError("venue")?S.labelErr:{})}}>عنوان المناسبة (القاعة / المدينة) *</label>
+              <input style={{...S.input,...errStyle("venue")}} placeholder="مثال: قاعة ليلتي، الرياض" value={form.venue} onChange={e=>setForm({...form,venue:e.target.value})}/>
+              {isFieldError("venue")&&<small style={S.fieldErrMsg}>هذا الحقل مطلوب</small>}
+            </div>
+
+            {/* Map link - optional */}
             <Field label="رابط موقع القاعة على الخريطة" placeholder="https://maps.google.com/..." value={form.mapLink} onChange={v=>setForm({...form,mapLink:v})} optional/>
+
+            {/* Notes - optional */}
             <div style={S.fieldGroup}>
               <label style={S.label}>ملاحظات إضافية <span style={{fontWeight:400,color:"#aaa",fontSize:12}}>(اختياري)</span></label>
               <input style={S.input} placeholder="أي تفاصيل أخرى..." value={form.notes} onChange={e=>setForm({...form,notes:e.target.value})}/>
             </div>
+
             {formError&&<p style={S.error}>{formError}</p>}
             <button className="btn-gold" style={{width:"100%",marginTop:8}} onClick={handleSubmit}>إرسال الطلب للإدارة</button>
           </div>
@@ -478,10 +535,9 @@ export default function App() {
         </div>
       )}
 
-      {/* Footer — two lines */}
       <footer style={S.footer}>
         <p style={{margin:"0 0 4px"}}>{SITE_NAME} .. مساهمة مجتمعية</p>
-        <p style={{margin:0,fontSize:11,fontWeight:400,color:"#aaa",fontFamily:"'Tajawal',sans-serif",direction:"ltr"}}>by Mohammed Jilan Alkhiry</p>
+        <p style={{margin:0,fontSize:11,fontWeight:400,color:"#aaa",fontFamily:"inherit",direction:"ltr"}}>by Mohammed Jilan Alkhiry</p>
       </footer>
 
       {shareCardEvent&&<ShareCardModal ev={shareCardEvent} onClose={()=>setShareCardEvent(null)} onWa={shareEventWa}/>}
@@ -496,7 +552,6 @@ function PosterModal({events,onClose}:{events:Event[];onClose:()=>void}) {
   const nameFz = count<=5?14:count<=8?13:count<=12?11:count<=16?10:9;
   const metaFz = nameFz-1;
   const rowPad = count<=6?8:count<=10?6:count<=15?4:3;
-
   return (
     <div style={PM.overlay} onClick={onClose}>
       <div style={PM.wrap} onClick={e=>e.stopPropagation()}>
@@ -569,7 +624,6 @@ function ShareCardModal({ev,onClose,onWa}:{ev:Event;onClose:()=>void;onWa:(e:Eve
   );
 }
 
-// ── Icons ─────────────────────────────────────────────────────────
 function ShareIcon() { return <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>; }
 function SearchIcon({active}:{active:boolean}) { return <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={active?"#fff":"#888"} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>; }
 function EditIcon() { return <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>; }
@@ -641,10 +695,12 @@ const S: Record<string,React.CSSProperties> = {
   formTitle:{fontSize:19,fontWeight:800,color:"#6b4d0e",marginBottom:16,textAlign:"center"},
   fieldGroup:{marginBottom:14},
   label:{display:"block",fontWeight:700,color:"#1a1208",marginBottom:6,fontSize:13},
+  labelErr:{color:"#e53e3e"},
+  fieldErrMsg:{color:"#e53e3e",fontSize:11,marginTop:3,display:"block"},
   input:{width:"100%",padding:"9px 12px",border:"1.5px solid #e0cfa0",borderRadius:8,fontSize:13,background:"#fffdf7",color:"#1a1208",outline:"none",boxSizing:"border-box",fontFamily:"inherit"},
   select:{width:"100%",padding:"9px 12px",border:"1.5px solid #e0cfa0",borderRadius:8,fontSize:13,background:"#fffdf7",color:"#1a1208",outline:"none",boxSizing:"border-box",fontFamily:"inherit"},
   textarea:{width:"100%",padding:"9px 12px",border:"1.5px solid #e0cfa0",borderRadius:8,fontSize:13,background:"#fffdf7",color:"#1a1208",outline:"none",boxSizing:"border-box",fontFamily:"inherit",resize:"vertical"},
-  error:{color:"#c0392b",fontSize:12,textAlign:"center",marginBottom:8},
+  error:{color:"#e53e3e",fontSize:12,textAlign:"center",marginBottom:8,padding:"8px",background:"#fff5f5",borderRadius:8,border:"1px solid #fed7d7"},
   waNotifyBtn:{display:"flex",alignItems:"center",justifyContent:"center",gap:8,background:"#25d366",color:"#fff",border:"none",borderRadius:10,padding:"14px",cursor:"pointer",fontFamily:"inherit",fontWeight:800,fontSize:15,width:"100%"},
   back:{background:"none",border:"none",cursor:"pointer",color:"#8b6914",fontSize:13,fontWeight:600,padding:0,marginBottom:10,fontFamily:"inherit",display:"block"},
   adminCard:{background:"#fff",borderRadius:10,padding:"11px 13px",border:"1px solid #e8d9b5",marginBottom:8},
