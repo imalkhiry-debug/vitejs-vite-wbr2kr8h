@@ -31,6 +31,7 @@ const dbToEvent = (r:Record<string,unknown>):Event => ({
   status:r.status as "pending"|"approved", createdAt:r.created_at as number,
 });
 
+// ── Hijri helpers ─────────────────────────────────────────────────
 const parseHijriParts = (d:string):{y:number;m:number;day:number} => {
   const clean = d.replace(/\s*هـ\s*/g,"").trim();
   const parts = clean.split("/").map(p=>parseInt(p.trim())||0);
@@ -63,6 +64,31 @@ const formatHijri = (y:string,m:string,d:string):string => `${y}/${String(m).pad
 const generateId = ():string => Date.now().toString(36)+Math.random().toString(36).slice(2);
 const generatePass = ():string => Math.random().toString(36).slice(2,8).toUpperCase();
 const getMonthName = (hijriDate:string):string => { const {m}=parseHijriParts(hijriDate); return m>0?HIJRI_MONTHS[m-1]:""; };
+
+// ── Auto day from hijri date ──────────────────────────────────────
+const hijriToGregorian = (hy:number, hm:number, hd:number):Date|null => {
+  try {
+    // Approximate gregorian date
+    const approxMs = new Date(Math.floor(hy * 354.367 / 365.25) + 621, Math.floor((hm-1)*30.4), hd).getTime();
+    for(let offset=-90; offset<=90; offset++) {
+      const d = new Date(approxMs + offset*86400000);
+      const parts = new Intl.DateTimeFormat("en-u-ca-islamic",{year:"numeric",month:"2-digit",day:"2-digit"}).formatToParts(d);
+      const y=parseInt(parts.find(p=>p.type==="year")?.value||"0");
+      const m=parseInt(parts.find(p=>p.type==="month")?.value||"0");
+      const day=parseInt(parts.find(p=>p.type==="day")?.value||"0");
+      if(y===hy&&m===hm&&day===hd) return d;
+    }
+  } catch {}
+  return null;
+};
+const getHijriDayName = (hy:string, hm:string, hd:string):string => {
+  if(!hy||!hm||!hd) return "";
+  try {
+    const date = hijriToGregorian(parseInt(hy), parseInt(hm), parseInt(hd));
+    if(!date) return "";
+    return DAYS[date.getDay()];
+  } catch { return ""; }
+};
 
 export default function App() {
   const [page, setPage] = useState("home");
@@ -111,6 +137,16 @@ export default function App() {
   const setView = (v:"full"|"list") => { setViewMode(v); localStorage.setItem("manasbat_view",v); setShowViewMenu(false); };
   const nav = (p:string) => { setPage(p); setSidebarOpen(false); setShowFilter(false); setShowViewMenu(false); };
   const closeDropdowns = () => { setShowFilter(false); setShowViewMenu(false); };
+
+  // Auto-fill day when hijri date changes
+  const handleHijriChange = (y:string, m:string, d:string) => {
+    const autoDay = getHijriDayName(y, m, d);
+    setForm(prev=>({...prev, hijriYear:y, hijriMonth:m, hijriDay:d, day:autoDay||prev.day}));
+  };
+  const handleEditHijriChange = (y:string, m:string, d:string) => {
+    const autoDay = getHijriDayName(y, m, d);
+    setEditForm(prev=>({...prev, hijriYear:y, hijriMonth:m, hijriDay:d, day:autoDay||prev.day}));
+  };
 
   const allApproved = events.filter(e=>e.status==="approved"&&!isPast(e.hijriDate)).sort(sortByHijri);
   const activeApproved = allApproved.filter(e=>{
@@ -208,8 +244,15 @@ export default function App() {
       {editingId===ev.id?(
         <div>
           <Field label="الاسم" value={editForm.name} onChange={v=>setEditForm({...editForm,name:v})}/>
-          <HijriField year={editForm.hijriYear} month={editForm.hijriMonth} day={editForm.hijriDay} onChange={(y,m,d)=>setEditForm({...editForm,hijriYear:y,hijriMonth:m,hijriDay:d})}/>
-          <div style={S.fieldGroup}><label style={S.label}>اليوم</label><select style={S.select} value={editForm.day} onChange={e=>setEditForm({...editForm,day:e.target.value})}>{DAYS.map(d=><option key={d} value={d}>{d}</option>)}</select></div>
+          <HijriField year={editForm.hijriYear} month={editForm.hijriMonth} day={editForm.hijriDay} onChange={handleEditHijriChange}/>
+          <div style={S.fieldGroup}>
+            <label style={S.label}>اليوم</label>
+            <select style={S.select} value={editForm.day} onChange={e=>setEditForm({...editForm,day:e.target.value})}>
+              <option value="">اختر اليوم</option>
+              {DAYS.map(d=><option key={d} value={d}>{d}</option>)}
+            </select>
+            {editForm.day&&<small style={{color:"#aaa",fontSize:11,marginTop:3,display:"block"}}>تم تحديده تلقائياً — يمكنك تغييره</small>}
+          </div>
           <Field label="رقم الجوال" value={editForm.phone} onChange={v=>setEditForm({...editForm,phone:v})}/>
           <Field label="العنوان" value={editForm.venue} onChange={v=>setEditForm({...editForm,venue:v})}/>
           <Field label="رابط الخريطة" value={editForm.mapLink} onChange={v=>setEditForm({...editForm,mapLink:v})}/>
@@ -332,13 +375,14 @@ export default function App() {
             <button style={S.back} onClick={()=>setPage("home")}>← العودة</button>
             <h2 style={S.formTitle}>تسجيل مناسبة جديدة</h2>
             <Field label="اسم صاحب المناسبة *" placeholder="مثال: فلان بن فلان الفلاني" value={form.name} onChange={v=>setForm({...form,name:v})}/>
-            <HijriField year={form.hijriYear} month={form.hijriMonth} day={form.hijriDay} onChange={(y,m,d)=>setForm({...form,hijriYear:y,hijriMonth:m,hijriDay:d})}/>
+            <HijriField year={form.hijriYear} month={form.hijriMonth} day={form.hijriDay} onChange={handleHijriChange}/>
             <div style={S.fieldGroup}>
               <label style={S.label}>اليوم *</label>
               <select style={S.select} value={form.day} onChange={e=>setForm({...form,day:e.target.value})}>
                 <option value="">اختر اليوم</option>
                 {DAYS.map(d=><option key={d} value={d}>{d}</option>)}
               </select>
+              {form.day&&<small style={{color:"#c9a227",fontSize:11,marginTop:3,display:"block"}}>✓ تم تحديده تلقائياً — يمكنك تغييره إذا كان خطأ</small>}
             </div>
             <Field label="رقم الجوال للتواصل *" placeholder="0500000000" value={form.phone} onChange={v=>setForm({...form,phone:v})}/>
             <Field label="عنوان المناسبة (القاعة / المدينة) *" placeholder="مثال: قاعة ليلتي، الرياض" value={form.venue} onChange={v=>setForm({...form,venue:v})}/>
@@ -434,7 +478,11 @@ export default function App() {
         </div>
       )}
 
-      <footer style={S.footer}>{SITE_NAME} .. مساهمة مجتمعية</footer>
+      {/* Footer — two lines */}
+      <footer style={S.footer}>
+        <p style={{margin:"0 0 4px"}}>{SITE_NAME} .. مساهمة مجتمعية</p>
+        <p style={{margin:0,fontSize:11,fontWeight:400,color:"#aaa",fontFamily:"'Tajawal',sans-serif",direction:"ltr"}}>by Mohammed Jilan Alkhiry</p>
+      </footer>
 
       {shareCardEvent&&<ShareCardModal ev={shareCardEvent} onClose={()=>setShareCardEvent(null)} onWa={shareEventWa}/>}
       {showPoster&&<PosterModal events={allApproved} onClose={()=>setShowPoster(false)}/>}
@@ -442,7 +490,7 @@ export default function App() {
   );
 }
 
-// ── Poster — responsive, scrollable ──────────────────────────────
+// ── Poster ────────────────────────────────────────────────────────
 function PosterModal({events,onClose}:{events:Event[];onClose:()=>void}) {
   const count = events.length;
   const nameFz = count<=5?14:count<=8?13:count<=12?11:count<=16?10:9;
@@ -452,12 +500,10 @@ function PosterModal({events,onClose}:{events:Event[];onClose:()=>void}) {
   return (
     <div style={PM.overlay} onClick={onClose}>
       <div style={PM.wrap} onClick={e=>e.stopPropagation()}>
-        {/* Close + label — always visible above poster */}
         <div style={PM.topBar}>
           <span style={{color:"#fff",fontSize:11}}>صوّر الشاشة لمشاركة البوستر</span>
           <button style={PM.closeBtn} onClick={onClose}>✕</button>
         </div>
-        {/* Poster scrollable content */}
         <div style={PM.scrollArea}>
           <div style={PM.poster}>
             <div style={PM.stripe}/>
@@ -469,18 +515,8 @@ function PosterModal({events,onClose}:{events:Event[];onClose:()=>void}) {
             <div style={PM.divider}>— ❖ —</div>
             <div>
               {events.map((ev,i)=>(
-                <div key={ev.id} style={{
-                  display:"flex", alignItems:"flex-start", gap:8,
-                  padding:`${rowPad}px 12px`,
-                  background:i%2===0?"#ffffff":"#fdfaf3",
-                  borderBottom:"1px solid #f0e8d0",
-                }}>
-                  <div style={{
-                    width:18,height:18,borderRadius:"50%",
-                    background:"#c9a227",color:"#fff",
-                    display:"flex",alignItems:"center",justifyContent:"center",
-                    fontSize:9,fontWeight:800,flexShrink:0,marginTop:2,
-                  }}>{i+1}</div>
+                <div key={ev.id} style={{display:"flex",alignItems:"flex-start",gap:8,padding:`${rowPad}px 12px`,background:i%2===0?"#ffffff":"#fdfaf3",borderBottom:"1px solid #f0e8d0"}}>
+                  <div style={{width:18,height:18,borderRadius:"50%",background:"#c9a227",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",fontSize:9,fontWeight:800,flexShrink:0,marginTop:2}}>{i+1}</div>
                   <div style={{flex:1}}>
                     <div style={{fontSize:nameFz,fontWeight:800,color:"#1a1208",lineHeight:1.3}}>{ev.name}</div>
                     <div style={{fontSize:metaFz,color:"#555",lineHeight:1.3}}>{ev.hijriDate} · {ev.venue}</div>
@@ -625,8 +661,7 @@ const S: Record<string,React.CSSProperties> = {
   tab:{flex:1,padding:"8px 4px",border:"1.5px solid #e8d9b5",borderRadius:8,background:"#fff",cursor:"pointer",fontSize:12,fontWeight:600,fontFamily:"inherit",color:"#aaa",display:"flex",alignItems:"center",justifyContent:"center",gap:4},
   tabActive:{background:"#7a5a10",color:"#fff",borderColor:"#7a5a10"},
   tabBadge:{background:"rgba(255,255,255,0.25)",borderRadius:20,padding:"1px 5px",fontSize:10},
-  // Footer — darker text
-  footer:{textAlign:"center",padding:"16px",color:"#888",fontSize:12,borderTop:"1px solid #e8d9b5",marginTop:24},
+  footer:{textAlign:"center",padding:"20px 16px",color:"#888",fontSize:12,borderTop:"1px solid #e8d9b5",marginTop:24,fontWeight:600},
 };
 
 const PM: Record<string,React.CSSProperties> = {
