@@ -101,7 +101,7 @@ export default function App() {
   const [formTouched, setFormTouched] = useState<Record<string,boolean>>({});
   const [submittedEvent, setSubmittedEvent] = useState<Event|null>(null);
   const [loading, setLoading] = useState(true);
-  const [viewMode, setViewMode] = useState<"full"|"list">(() => (localStorage.getItem("manasbat_view")||"list") as "full"|"list");
+  const [viewMode, setViewMode] = useState<"full"|"list">(() => (localStorage.getItem("manasbat_view")||"full") as "full"|"list");
   const [expandedId, setExpandedId] = useState<string|null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [shareCardEvent, setShareCardEvent] = useState<Event|null>(null);
